@@ -60,8 +60,8 @@ all: main-build
 main-build: toolchain-setup.elf secondary-outputs
 
 # Tool invocations
-toolchain-setup.elf toolchain-setup.map: $(OBJS) $(USER_OBJS) W:\Project\ Files\STM32-PAROL6-controller\toolchain-setup\STM32F446RETX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "toolchain-setup.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"W:\Project Files\STM32-PAROL6-controller\toolchain-setup\STM32F446RETX_FLASH.ld" --specs=nosys.specs -Wl,-Map="toolchain-setup.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+toolchain-setup.elf toolchain-setup.map: $(OBJS) $(USER_OBJS) W:\Project\ Files\STM32-PAROL6-controller\firmware\toolchain-setup\STM32F446RETX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "toolchain-setup.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"W:\Project Files\STM32-PAROL6-controller\firmware\toolchain-setup\STM32F446RETX_FLASH.ld" --specs=nosys.specs -Wl,-Map="toolchain-setup.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 
