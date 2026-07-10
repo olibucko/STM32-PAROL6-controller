@@ -46,6 +46,9 @@ UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 
+uint8_t tx[5];   // To send, an array of 5, 8-bit unassigned integers
+uint8_t rx[5];   // To receive, an array of 5, 8-bit unassigned integers
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -101,11 +104,26 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+	// Transfer 1: Request GCONF (address 0x00, read = top bit clear)
+	tx[0] = 0x00; // GCONF Address Bit, top bit = 0 (read mode)
+	tx[1] = 0x00; tx[2] = 0x00; tx[3] = 0x00; tx[4] = 0x00;
+
+	HAL_GPIO_WritePin(TMC_CS_GPIO_Port, TMC_CS_Pin, GPIO_PIN_RESET); // CS low - begin transfer.
+	HAL_SPI_TransmitReceive(&hspi2, tx, rx, 5, HAL_MAX_DELAY); // Send (instruction we want) and Receive (stale)
+	HAL_GPIO_WritePin(TMC_CS_GPIO_Port, TMC_CS_Pin, GPIO_PIN_SET); // CS high - end transfer.
+
+	HAL_Delay(200);
+
+	// Transfer 2:
+	HAL_GPIO_WritePin(TMC_CS_GPIO_Port,  TMC_CS_Pin, GPIO_PIN_RESET); // CS low - begin transfer.
+	HAL_SPI_TransmitReceive(&hspi2, tx, rx, 5, HAL_MAX_DELAY); // Send (unimportant, same tx as Transfer 1 for ease) and Receive (data we want from Transfer 1)
+	HAL_GPIO_WritePin(TMC_CS_GPIO_Port,  TMC_CS_Pin, GPIO_PIN_SET); // CS high - end transfer.
+
+	HAL_Delay(200); // BREAK POINT HERE AND CHECK RX, TX VALUES
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
-	  HAL_Delay(2000);
   }
   /* USER CODE END 3 */
 }
