@@ -104,22 +104,28 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	// Transfer 1: Request GCONF (address 0x00, read = top bit clear)
-	tx[0] = 0x00; // GCONF Address Bit, top bit = 0 (read mode)
-	tx[1] = 0x00; tx[2] = 0x00; tx[3] = 0x00; tx[4] = 0x00;
+	  // --- WRITE 0xAB to TPOWERDOWN (0x11 | 0x80 = 0x91 for write) ---
+	     tx[0] = 0x91;
+	     tx[1] = 0x00; tx[2] = 0x00; tx[3] = 0x00; tx[4] = 0xAB;
 
-	HAL_GPIO_WritePin(TMC_CS_GPIO_Port, TMC_CS_Pin, GPIO_PIN_RESET); // CS low - begin transfer.
-	HAL_SPI_TransmitReceive(&hspi2, tx, rx, 5, HAL_MAX_DELAY); // Send (instruction we want) and Receive (stale)
-	HAL_GPIO_WritePin(TMC_CS_GPIO_Port, TMC_CS_Pin, GPIO_PIN_SET); // CS high - end transfer.
+	     HAL_GPIO_WritePin(TMC_CS_GPIO_Port, TMC_CS_Pin, GPIO_PIN_RESET);
+	     HAL_SPI_TransmitReceive(&hspi2, tx, rx, 5, HAL_MAX_DELAY);
+	     HAL_GPIO_WritePin(TMC_CS_GPIO_Port, TMC_CS_Pin, GPIO_PIN_SET);
 
-	HAL_Delay(200);
+	     // --- READ REQUEST: TPOWERDOWN (0x11, top bit clear = read) ---
+	     tx[0] = 0x11;
+	     tx[1] = 0x00; tx[2] = 0x00; tx[3] = 0x00; tx[4] = 0x00;
 
-	// Transfer 2:
-	HAL_GPIO_WritePin(TMC_CS_GPIO_Port,  TMC_CS_Pin, GPIO_PIN_RESET); // CS low - begin transfer.
-	HAL_SPI_TransmitReceive(&hspi2, tx, rx, 5, HAL_MAX_DELAY); // Send (unimportant, same tx as Transfer 1 for ease) and Receive (data we want from Transfer 1)
-	HAL_GPIO_WritePin(TMC_CS_GPIO_Port,  TMC_CS_Pin, GPIO_PIN_SET); // CS high - end transfer.
+	     HAL_GPIO_WritePin(TMC_CS_GPIO_Port, TMC_CS_Pin, GPIO_PIN_RESET);
+	     HAL_SPI_TransmitReceive(&hspi2, tx, rx, 5, HAL_MAX_DELAY);
+	     HAL_GPIO_WritePin(TMC_CS_GPIO_Port, TMC_CS_Pin, GPIO_PIN_SET);
 
-	HAL_Delay(200); // BREAK POINT HERE AND CHECK RX, TX VALUES
+	     // --- READ COLLECT: value arrives now ---
+	     HAL_GPIO_WritePin(TMC_CS_GPIO_Port, TMC_CS_Pin, GPIO_PIN_RESET);
+	     HAL_SPI_TransmitReceive(&hspi2, tx, rx, 5, HAL_MAX_DELAY);
+	     HAL_GPIO_WritePin(TMC_CS_GPIO_Port, TMC_CS_Pin, GPIO_PIN_SET);
+
+	     HAL_Delay(200);   // <-- breakpoint here
 
     /* USER CODE END WHILE */
 
