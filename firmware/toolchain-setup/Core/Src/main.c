@@ -104,17 +104,15 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	  // --- WRITE 0xAB to TPOWERDOWN (0x11 | 0x80 = 0x91 for write) ---
-	     tx[0] = 0x91;
-	     tx[1] = 0x00; tx[2] = 0x00; tx[3] = 0x00; tx[4] = 0xAB;
+		  // WRITE 0xAB to XACTUAL  (0x21 | 0x80 = 0xA1)
+		  tx[0] = 0xA1; tx[1]=0x00; tx[2]=0x00; tx[3]=0x00; tx[4]=0xAB;
 
 	     HAL_GPIO_WritePin(TMC_CS_GPIO_Port, TMC_CS_Pin, GPIO_PIN_RESET);
 	     HAL_SPI_TransmitReceive(&hspi2, tx, rx, 5, HAL_MAX_DELAY);
 	     HAL_GPIO_WritePin(TMC_CS_GPIO_Port, TMC_CS_Pin, GPIO_PIN_SET);
 
-	     // --- READ REQUEST: TPOWERDOWN (0x11, top bit clear = read) ---
-	     tx[0] = 0x11;
-	     tx[1] = 0x00; tx[2] = 0x00; tx[3] = 0x00; tx[4] = 0x00;
+	     // READ REQUEST XACTUAL (0x21)
+	     tx[0] = 0x21; tx[1]=0x00; tx[2]=0x00; tx[3]=0x00; tx[4]=0x00;
 
 	     HAL_GPIO_WritePin(TMC_CS_GPIO_Port, TMC_CS_Pin, GPIO_PIN_RESET);
 	     HAL_SPI_TransmitReceive(&hspi2, tx, rx, 5, HAL_MAX_DELAY);
