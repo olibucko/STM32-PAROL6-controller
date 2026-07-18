@@ -121,6 +121,16 @@ int main(void)
 
   tmc5160_write(TMC_XACTUAL,  0);               // zero the position counter
 
+  /* --- read back what actually landed + fault flags --- */
+  uint32_t r_gconf   = tmc5160_read(TMC_GCONF);
+  uint32_t r_gstat   = tmc5160_read(TMC_GSTAT);
+  uint32_t r_gscaler = tmc5160_read(TMC_GLOBALSCALER);  // NOTE: may read 0 — it's write-only on some revs
+  uint32_t r_chop    = tmc5160_read(TMC_CHOPCONF);
+  uint32_t r_ihold   = tmc5160_read(TMC_IHOLD_IRUN);    // write-only — likely 0, ignore
+  uint32_t r_drvstat = tmc5160_read(TMC_DRV_STATUS);
+  uint32_t r_ioin    = tmc5160_read(TMC_IOIN);
+  __NOP();  // <-- breakpoint HERE
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
