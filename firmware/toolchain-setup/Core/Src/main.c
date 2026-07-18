@@ -100,6 +100,8 @@ int main(void)
 
   /* USER CODE BEGIN 2 */
 
+  tmc5160_write(TMC_GSTAT, 0x07);        // clear flags FIRST
+  tmc5160_write(TMC_GCONF, 0x00);
   /* --- Driver configuration --- */
   tmc5160_write(TMC_CHOPCONF,   0x000100C3);              // default chopper config
   tmc5160_write(TMC_IHOLD_IRUN, (6 << 16) | (16 << 8) | 8); // IHOLDDELAY=6, IRUN=16, IHOLD=8
