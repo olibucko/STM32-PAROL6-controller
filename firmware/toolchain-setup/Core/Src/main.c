@@ -103,7 +103,7 @@ int main(void)
   tmc5160_write(TMC_GSTAT, 0x07);              // clear reset/error flags
 
   /* --- Current & chopper setup (datasheet quick-config, current-scaled for 2A motor) --- */
-  tmc5160_write(TMC_GCONF,        0x00000004);  // en_pwm_mode = 1 (StealthChop ON)
+  tmc5160_write(TMC_GCONF,        0x00000000);  // en_pwm_mode = 1 (StealthChop ON)
   tmc5160_write(TMC_GLOBALSCALER, 64);         // ~0.8A current
   tmc5160_write(TMC_CHOPCONF,     0x000100C3);  // TOFF=3, HSTRT=4, HEND=1, TBL=2, SpreadCycle
   tmc5160_write(TMC_IHOLD_IRUN,   0x00061F0A);  // IHOLD=10, IRUN=31 (scaled by GLOBALSCALER), IHOLDDELAY=6
