@@ -98,6 +98,12 @@ int main(void)
   MX_SPI2_Init();
   /* USER CODE BEGIN 2 */
 
+  /* Set motor current values in register */
+  tmc5160_write(TMC_IHOLD_IRUN, (6 << 16) | (16 << 8) | 8);
+
+  /* Set chopper values, known default for now */
+  tmc5160_write(TMC_CHOPCONF, 0x000100C3);
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
