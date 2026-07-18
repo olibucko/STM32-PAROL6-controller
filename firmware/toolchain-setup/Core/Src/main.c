@@ -21,6 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "tmc5160.h"
 
 /* USER CODE END Includes */
 
@@ -46,8 +47,7 @@ UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 
-uint8_t tx[5];   // To send, an array of 5, 8-bit unassigned integers
-uint8_t rx[5];   // To receive, an array of 5, 8-bit unassigned integers
+uint32_t val;
 
 /* USER CODE END PV */
 
@@ -104,26 +104,10 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-		  // WRITE 0xAB to XACTUAL  (0x21 | 0x80 = 0xA1)
-		  tx[0] = 0xA1; tx[1]=0x00; tx[2]=0x00; tx[3]=0x00; tx[4]=0xAB;
-
-	     HAL_GPIO_WritePin(TMC_CS_GPIO_Port, TMC_CS_Pin, GPIO_PIN_RESET);
-	     HAL_SPI_TransmitReceive(&hspi2, tx, rx, 5, HAL_MAX_DELAY);
-	     HAL_GPIO_WritePin(TMC_CS_GPIO_Port, TMC_CS_Pin, GPIO_PIN_SET);
-
-	     // READ REQUEST XACTUAL (0x21)
-	     tx[0] = 0x21; tx[1]=0x00; tx[2]=0x00; tx[3]=0x00; tx[4]=0x00;
-
-	     HAL_GPIO_WritePin(TMC_CS_GPIO_Port, TMC_CS_Pin, GPIO_PIN_RESET);
-	     HAL_SPI_TransmitReceive(&hspi2, tx, rx, 5, HAL_MAX_DELAY);
-	     HAL_GPIO_WritePin(TMC_CS_GPIO_Port, TMC_CS_Pin, GPIO_PIN_SET);
-
-	     // --- READ COLLECT: value arrives now ---
-	     HAL_GPIO_WritePin(TMC_CS_GPIO_Port, TMC_CS_Pin, GPIO_PIN_RESET);
-	     HAL_SPI_TransmitReceive(&hspi2, tx, rx, 5, HAL_MAX_DELAY);
-	     HAL_GPIO_WritePin(TMC_CS_GPIO_Port, TMC_CS_Pin, GPIO_PIN_SET);
-
-	     HAL_Delay(200);   // <-- breakpoint here
+	  // WRITE 0xAB to XACTUAL  (0x21)
+	  tmc5160_write(TMC_XACTUAL, 0xAB);
+	  val = tmc5160_read(TMC_XACTUAL);
+	  HAL_Delay(200);   // <-- breakpoint here
 
     /* USER CODE END WHILE */
 
