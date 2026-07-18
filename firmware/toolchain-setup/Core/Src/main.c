@@ -104,7 +104,7 @@ int main(void)
 
   /* --- Current & chopper setup (datasheet quick-config, current-scaled for 2A motor) --- */
   tmc5160_write(TMC_GCONF,        0x00000000);  // en_pwm_mode = 1 (StealthChop ON)
-  tmc5160_write(TMC_GLOBALSCALER, 64);         // ~0.8A current
+  tmc5160_write(TMC_GLOBALSCALER, 128);         // ~0.8A current
   tmc5160_write(TMC_CHOPCONF,     0x000100C3);  // TOFF=3, HSTRT=4, HEND=1, TBL=2, SpreadCycle
   tmc5160_write(TMC_IHOLD_IRUN,   0x00061F0A);  // IHOLD=10, IRUN=31 (scaled by GLOBALSCALER), IHOLDDELAY=6
   tmc5160_write(TMC_TPOWERDOWN,   0x0000000A);  // =10
@@ -129,7 +129,7 @@ int main(void)
   uint32_t r_ihold   = tmc5160_read(TMC_IHOLD_IRUN);    // write-only — likely 0, ignore
   uint32_t r_drvstat = tmc5160_read(TMC_DRV_STATUS);
   uint32_t r_ioin    = tmc5160_read(TMC_IOIN);
-  __NOP();  // <-- breakpoint HERE
+
 
   /* USER CODE END 2 */
 
@@ -137,11 +137,15 @@ int main(void)
   /* USER CODE BEGIN WHILE  */
   while (1)
   {
-	tmc5160_write(TMC_RAMPMODE, 1);   // spin
-	HAL_Delay(3000);
-
-	tmc5160_write(TMC_RAMPMODE, 0);   // stop
-	HAL_Delay(3000);
+	    tmc5160_write(TMC_RAMPMODE, 1);   // spin
+	    HAL_Delay(500);
+	    uint32_t moving_drv = tmc5160_read(TMC_DRV_STATUS);
+	    uint32_t moving_vact = tmc5160_read(TMC_VACTUAL);   // actual velocity
+	    uint32_t moving_xact = tmc5160_read(TMC_XACTUAL);   // position
+	    __NOP();  // breakpoint — read these DURING motion
+	    HAL_Delay(2500);
+	    tmc5160_write(TMC_RAMPMODE, 0);
+	    HAL_Delay(3000);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
