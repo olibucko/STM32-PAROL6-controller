@@ -117,9 +117,17 @@ int main(void)
   tmc5160_write(TMC_VSTOP,    10);
 
   tmc5160_write(TMC_XACTUAL,  0);          // define current position as zero (clean start)
+
   tmc5160_write(TMC_RAMPMODE, 1);          // Start moving
   HAL_Delay (2000);
   tmc5160_write(TMC_RAMPMODE, 0);			// Stop moving
+
+  /* Diagnostics */
+  uint32_t gstat       = tmc5160_read(TMC_GSTAT);
+  uint32_t drv_status  = tmc5160_read(TMC_DRV_STATUS);
+  uint32_t vmax_check  = tmc5160_read(TMC_VMAX);
+  uint32_t xactual_chk = tmc5160_read(TMC_XACTUAL);
+  __NOP(); // BREAKPOINT HERE!
 
   /* USER CODE END 2 */
 
