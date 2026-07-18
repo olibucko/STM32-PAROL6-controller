@@ -98,34 +98,28 @@ int main(void)
   MX_SPI2_Init();
   /* USER CODE BEGIN 2 */
 
-  /* USER CODE BEGIN 2 */
 
-  tmc5160_write(TMC_GSTAT, 0x07);        // clear flags FIRST
-  tmc5160_write(TMC_GCONF, 0x00);
-  /* --- Driver configuration --- */
-  tmc5160_write(TMC_CHOPCONF,   0x000100C3);              // default chopper config
-  tmc5160_write(TMC_IHOLD_IRUN, (6 << 16) | (16 << 8) | 8); // IHOLDDELAY=6, IRUN=16, IHOLD=8
-  tmc5160_write(TMC_TPOWERDOWN, 10);                      // standstill delay
+  /* --- Clear flags --- */
+  tmc5160_write(TMC_GSTAT, 0x07);              // clear reset/error flags
 
-  /* --- Ramp generator: velocity mode --- */
+  /* --- Current & chopper setup (datasheet quick-config, current-scaled for 2A motor) --- */
+  tmc5160_write(TMC_GCONF,        0x00000004);  // en_pwm_mode = 1 (StealthChop ON)
+  tmc5160_write(TMC_GLOBALSCALER, 64);         // ~0.8A current
+  tmc5160_write(TMC_CHOPCONF,     0x000100C3);  // TOFF=3, HSTRT=4, HEND=1, TBL=2, SpreadCycle
+  tmc5160_write(TMC_IHOLD_IRUN,   0x00061F0A);  // IHOLD=10, IRUN=31 (scaled by GLOBALSCALER), IHOLDDELAY=6
+  tmc5160_write(TMC_TPOWERDOWN,   0x0000000A);  // =10
+  tmc5160_write(TMC_TPWMTHRS,     0x000001F4);  // =500, StealthChop→SpreadCycle switch ~30RPM
+
+  /* --- Ramp generator params --- */
   tmc5160_write(TMC_A1,       1000);
   tmc5160_write(TMC_V1,       50000);
   tmc5160_write(TMC_AMAX,     500);
-  tmc5160_write(TMC_VMAX,     8000);
-  tmc5160_write(TMC_DMAX,     500);
-  tmc5160_write(TMC_D1,       1000);
+  tmc5160_write(TMC_VMAX,     5000);            // Slow velocity
+  tmc5160_write(TMC_DMAX,     700);
+  tmc5160_write(TMC_D1,       1400);
   tmc5160_write(TMC_VSTOP,    10);
 
-  tmc5160_write(TMC_XACTUAL,  0);          // define current position as zero (clean start)
-
-  /* Diagnostics */
-  uint32_t gstat       = tmc5160_read(TMC_GSTAT);
-  uint32_t drv_status  = tmc5160_read(TMC_DRV_STATUS);
-  uint32_t vmax_check  = tmc5160_read(TMC_VMAX);
-  uint32_t xactual_chk = tmc5160_read(TMC_XACTUAL);
-  __NOP(); // BREAKPOINT HERE!
-
-  /* USER CODE END 2 */
+  tmc5160_write(TMC_XACTUAL,  0);               // zero the position counter
 
   /* USER CODE END 2 */
 

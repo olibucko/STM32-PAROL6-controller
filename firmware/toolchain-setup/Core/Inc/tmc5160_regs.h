@@ -7,6 +7,8 @@
 #define TMC_GCONF           0x00    // RW
 #define TMC_GSTAT           0x01    // R+C
 #define TMC_IOIN            0x04    // R  (bits 31:24 = version, 0x30)
+#define TMC_GLOBALSCALER  	0x0B
+#define TMC_TPWMTHRS      	0x13
 
 /* Current control */
 #define TMC_IHOLD_IRUN      0x10    // W
