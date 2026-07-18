@@ -118,10 +118,6 @@ int main(void)
 
   tmc5160_write(TMC_XACTUAL,  0);          // define current position as zero (clean start)
 
-  tmc5160_write(TMC_RAMPMODE, 1);          // Start moving
-  HAL_Delay (5000);
-  tmc5160_write(TMC_RAMPMODE, 0);			// Stop moving
-
   /* Diagnostics */
   uint32_t gstat       = tmc5160_read(TMC_GSTAT);
   uint32_t drv_status  = tmc5160_read(TMC_DRV_STATUS);
@@ -137,8 +133,11 @@ int main(void)
   /* USER CODE BEGIN WHILE  */
   while (1)
   {
-	val = tmc5160_read(TMC_XACTUAL);   // Monitors motor position
-	HAL_Delay(200);
+	tmc5160_write(TMC_RAMPMODE, 1);   // spin
+	HAL_Delay(3000);
+
+	tmc5160_write(TMC_RAMPMODE, 0);   // stop
+	HAL_Delay(3000);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
