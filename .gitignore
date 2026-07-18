@@ -12,3 +12,9 @@ firmware/toolchain-setup/Debug/makefile
 firmware/toolchain-setup/Debug/toolchain-setup.elf
 firmware/toolchain-setup/Debug/toolchain-setup.list
 firmware/toolchain-setup/Debug/toolchain-setup.map
+firmware/toolchain-setup/Debug/Core/Src/main.cyclo
+firmware/toolchain-setup/Debug/Core/Src/main.o
+firmware/toolchain-setup/Debug/Core/Src/main.su
+firmware/toolchain-setup/Debug/toolchain-setup.elf
+firmware/toolchain-setup/Debug/toolchain-setup.list
+firmware/toolchain-setup/Debug/toolchain-setup.map
