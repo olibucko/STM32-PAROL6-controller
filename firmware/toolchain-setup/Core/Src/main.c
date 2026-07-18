@@ -98,11 +98,28 @@ int main(void)
   MX_SPI2_Init();
   /* USER CODE BEGIN 2 */
 
-  /* Set motor current values in register */
-  tmc5160_write(TMC_IHOLD_IRUN, (6 << 16) | (16 << 8) | 8);
+  /* USER CODE BEGIN 2 */
 
-  /* Set chopper values, known default for now */
-  tmc5160_write(TMC_CHOPCONF, 0x000100C3);
+  /* --- Driver configuration --- */
+  tmc5160_write(TMC_CHOPCONF,   0x000100C3);              // default chopper config
+  tmc5160_write(TMC_IHOLD_IRUN, (6 << 16) | (16 << 8) | 8); // IHOLDDELAY=6, IRUN=16, IHOLD=8
+  tmc5160_write(TMC_TPOWERDOWN, 10);                      // standstill delay
+
+  /* --- Ramp generator: velocity mode --- */
+  tmc5160_write(TMC_A1,       1000);
+  tmc5160_write(TMC_V1,       50000);
+  tmc5160_write(TMC_AMAX,     500);
+  tmc5160_write(TMC_VMAX,     200000);
+  tmc5160_write(TMC_DMAX,     500);
+  tmc5160_write(TMC_D1,       1000);
+  tmc5160_write(TMC_VSTOP,    10);
+
+  tmc5160_write(TMC_XACTUAL,  0);          // define current position as zero (clean start)
+  tmc5160_write(TMC_RAMPMODE, 1);          // Start moving
+  HAL_Delay (2000);
+  tmc5160_write(TMC_RAMPMODE, 0);			// Stop moving
+
+  /* USER CODE END 2 */
 
   /* USER CODE END 2 */
 
@@ -110,11 +127,8 @@ int main(void)
   /* USER CODE BEGIN WHILE  */
   while (1)
   {
-	  // WRITE 0xAB to XACTUAL  (0x21)
-	  tmc5160_write(TMC_XACTUAL, 0xAB);
-	  val = tmc5160_read(TMC_XACTUAL);
-	  HAL_Delay(200);   // <-- breakpoint here
-
+	val = tmc5160_read(TMC_XACTUAL);   // Monitors motor position
+	HAL_Delay(200);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */

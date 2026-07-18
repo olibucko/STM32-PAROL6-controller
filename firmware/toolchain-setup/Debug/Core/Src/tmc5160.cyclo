@@ -1,0 +1,5 @@
+../Core/Src/tmc5160.c:7:13:cs_low	1
+../Core/Src/tmc5160.c:8:13:cs_high	1
+../Core/Src/tmc5160.c:11:17:xfer	1
+../Core/Src/tmc5160.c:36:6:tmc5160_write	1
+../Core/Src/tmc5160.c:42:10:tmc5160_read	1
