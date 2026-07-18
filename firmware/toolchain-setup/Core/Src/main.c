@@ -107,7 +107,7 @@ int main(void)
   /* USER CODE END 2 */
 
   /* Infinite loop */
-  /* USER CODE BEGIN WHILE */
+  /* USER CODE BEGIN WHILE  */
   while (1)
   {
 	  // WRITE 0xAB to XACTUAL  (0x21)
