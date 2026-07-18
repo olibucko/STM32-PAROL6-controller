@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "tmc5160.h"
+#include <stdio.h>
 
 /* USER CODE END Includes */
 
@@ -63,6 +64,13 @@ static void MX_SPI2_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+	static void dbg(const char *tag, uint32_t v)
+	{
+		char buf[48];
+		int n = snprintf(buf, sizeof(buf), "%-10s 0x%08lX\r\n", tag, (unsigned long)v);
+		HAL_UART_Transmit(&huart2, (uint8_t *)buf, n, HAL_MAX_DELAY);
+	}
+
 /* USER CODE END 0 */
 
 /**
@@ -98,41 +106,22 @@ int main(void)
   MX_SPI2_Init();
   /* USER CODE BEGIN 2 */
 
+  tmc5160_write(TMC_GSTAT, 0x07);
+  tmc5160_write(TMC_GCONF,        0x00000000);   // SpreadCycle
+  tmc5160_write(TMC_GLOBALSCALER, 128);
+  tmc5160_write(TMC_CHOPCONF,     0x000100C3);   // TOFF=3, MRES=256
+  tmc5160_write(TMC_IHOLD_IRUN,   0x00081810);
+  tmc5160_write(TMC_TPOWERDOWN,   0x0000000A);
 
-  /* --- Clear flags --- */
-  tmc5160_write(TMC_GSTAT, 0x07);              // clear reset/error flags
-
-  /* --- Current & chopper setup (datasheet quick-config, current-scaled for 2A motor) --- */
-  tmc5160_write(TMC_GCONF,        0x00000000);
-  tmc5160_write(TMC_GLOBALSCALER, 128);         // ~0.8A current
-  tmc5160_write(TMC_CHOPCONF,     0x000100C3);  // TOFF=3, HSTRT=4, HEND=1, TBL=2, SpreadCycle
-  tmc5160_write(TMC_IHOLD_IRUN,   0x00061F0A);  // IHOLD=10, IRUN=31 (scaled by GLOBALSCALER), IHOLDDELAY=6
-  tmc5160_write(TMC_TPOWERDOWN,   0x0000000A);  // =10
-  tmc5160_write(TMC_TPWMTHRS,     0x000001F4);  // =500, StealthChop→SpreadCycle switch ~30RPM
-
-  /* --- Ramp generator params --- */
-  tmc5160_write(TMC_A1,       1000);
-  tmc5160_write(TMC_V1,       50000);
-  tmc5160_write(TMC_AMAX,     100);
-  tmc5160_write(TMC_VMAX,     1000);            // Slow velocity
-  tmc5160_write(TMC_DMAX,     700);
-  tmc5160_write(TMC_D1,       1400);
-  tmc5160_write(TMC_VSTOP,    10);
-
-  tmc5160_write(TMC_XACTUAL,  0);               // zero the position counter
-  tmc5160_write(TMC_XACTUAL, 0x12345678);
-  uint32_t rt = tmc5160_read(TMC_XACTUAL);   // MUST read back 0x12345678
-  __NOP();
-
-  /* --- read back what actually landed + fault flags --- */
-  uint32_t r_gconf   = tmc5160_read(TMC_GCONF);
-  uint32_t r_gstat   = tmc5160_read(TMC_GSTAT);
-  uint32_t r_gscaler = tmc5160_read(TMC_GLOBALSCALER);  // NOTE: may read 0 — it's write-only on some revs
-  uint32_t r_chop    = tmc5160_read(TMC_CHOPCONF);
-  uint32_t r_ihold   = tmc5160_read(TMC_IHOLD_IRUN);    // write-only — likely 0, ignore
-  uint32_t r_drvstat = tmc5160_read(TMC_DRV_STATUS);
-  uint32_t r_ioin    = tmc5160_read(TMC_IOIN);
-
+  tmc5160_write(TMC_A1,     1000);
+  tmc5160_write(TMC_V1,     0);
+  tmc5160_write(TMC_AMAX,   5000);
+  tmc5160_write(TMC_VMAX,   30000);
+  tmc5160_write(TMC_DMAX,   700);
+  tmc5160_write(TMC_D1,     1400);   // restored — must be >=1
+  tmc5160_write(TMC_VSTOP,  10);     // restored — must be >=1
+  tmc5160_write(TMC_VSTART, 0);      // explicit; VSTART <= VSTOP
+  tmc5160_write(TMC_XACTUAL, 0);
 
   /* USER CODE END 2 */
 
@@ -140,16 +129,34 @@ int main(void)
   /* USER CODE BEGIN WHILE  */
   while (1)
   {
-	    tmc5160_write(TMC_RAMPMODE, 1);   // spin
-	    HAL_Delay(500);
-	    uint32_t moving_drv = tmc5160_read(TMC_DRV_STATUS);
-	    uint32_t moving_vact = tmc5160_read(TMC_VACTUAL);   // actual velocity
-	    uint32_t moving_xact = tmc5160_read(TMC_XACTUAL);   // position
-	    __NOP();  // breakpoint — read these DURING motion
-	    HAL_Delay(2500);
-	    tmc5160_write(TMC_RAMPMODE, 0);
-	    HAL_Delay(3000);
-    /* USER CODE END WHILE */
+	  while (1)
+	  {
+	      tmc5160_write(TMC_XACTUAL, 0);
+	      tmc5160_write(TMC_VMAX, 30000);
+	      tmc5160_write(TMC_RAMPMODE, 1);        // spin (velocity+)
+
+	      HAL_Delay(200);                         // let ramp get going
+	      dbg("XACT_a",  tmc5160_read(TMC_XACTUAL));
+	      dbg("VACT",    tmc5160_read(TMC_VACTUAL));
+	      dbg("MSCNT_a", tmc5160_read(TMC_MSCNT));
+	      dbg("DRVSTAT", tmc5160_read(TMC_DRV_STATUS));
+	      dbg("GSTAT",   tmc5160_read(TMC_GSTAT));
+	      dbg("CHOP",    tmc5160_read(TMC_CHOPCONF));
+	      dbg("GCONF",   tmc5160_read(TMC_GCONF));
+	      dbg("IOIN",    tmc5160_read(TMC_IOIN));
+
+	      HAL_Delay(2000);                        // spin 2s more
+	      dbg("XACT_b",  tmc5160_read(TMC_XACTUAL));
+	      dbg("MSCNT_b", tmc5160_read(TMC_MSCNT));
+
+	      tmc5160_write(TMC_VMAX, 0);
+	      HAL_Delay(1000);
+	      tmc5160_write(TMC_RAMPMODE, 3);         // hold
+
+	      HAL_UART_Transmit(&huart2, (uint8_t*)"---- idle ----\r\n", 16, HAL_MAX_DELAY);
+	      HAL_Delay(10000);                       // idle so you can read the block
+	  }
+//    /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
   }

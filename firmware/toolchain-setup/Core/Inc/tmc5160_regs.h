@@ -3,6 +3,7 @@
 
 #define TMC_WRITE_BIT       0x80
 
+
 /* General config */
 #define TMC_GCONF           0x00    // RW
 #define TMC_GSTAT           0x01    // R+C
@@ -34,5 +35,6 @@
 #define TMC_CHOPCONF        0x6C    // RW
 #define TMC_COOLCONF        0x6D    // W
 #define TMC_DRV_STATUS      0x6F    // R
+#define TMC_MSCNT        0x6A   // live microstep counter (read-only)
 
 #endif
