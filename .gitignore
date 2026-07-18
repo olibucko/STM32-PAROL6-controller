@@ -1,0 +1,14 @@
+firmware/toolchain-setup/.settings/language.settings.xml
+firmware/toolchain-setup/.settings/stm32cubeide.project.prefs
+firmware/toolchain-setup/Debug/Core/Src/main.o
+firmware/toolchain-setup/Debug/Core/Src/stm32f4xx_hal_msp.o
+firmware/toolchain-setup/Debug/Core/Src/stm32f4xx_it.o
+firmware/toolchain-setup/Debug/Core/Src/subdir.mk
+firmware/toolchain-setup/Debug/Core/Src/syscalls.o
+firmware/toolchain-setup/Debug/Core/Src/sysmem.o
+firmware/toolchain-setup/Debug/Core/Src/system_stm32f4xx.o
+firmware/toolchain-setup/Debug/Core/Src/tmc5160.o
+firmware/toolchain-setup/Debug/makefile
+firmware/toolchain-setup/Debug/toolchain-setup.elf
+firmware/toolchain-setup/Debug/toolchain-setup.list
+firmware/toolchain-setup/Debug/toolchain-setup.map
