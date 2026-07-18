@@ -12,6 +12,8 @@ static uint32_t xfer(uint8_t addr, uint32_t value)
 {
     uint8_t tx[5], rx[5];
 
+    /* Use bit shifting ">>" to break up transferred value into 4 bytes (8 bits each).
+     * Shift the wanted byte down, mask to keep the low 8 bits */
     tx[0] = addr;
     tx[1] = (value >> 24) & 0xFF;
     tx[2] = (value >> 16) & 0xFF;
@@ -24,6 +26,7 @@ static uint32_t xfer(uint8_t addr, uint32_t value)
 
     tmc_status = rx[0];
 
+    /* Reassemble the 4 received bytes back into one 32-bit value by shifting each into its slot, using OR ("|") to merge */
     return ((uint32_t)rx[1] << 24) |
            ((uint32_t)rx[2] << 16) |
            ((uint32_t)rx[3] <<  8) |
@@ -32,11 +35,15 @@ static uint32_t xfer(uint8_t addr, uint32_t value)
 
 void tmc5160_write(uint8_t reg, uint32_t value)
 {
+
     xfer(reg | TMC_WRITE_BIT, value);
 }
 
 uint32_t tmc5160_read(uint8_t reg)
 {
+    /* TMC reads need two MOSI/MISO cycles. The first communicates the address to read, and the second transfers the read value.
+     * SPI sends and receives simultaneously, so the requested value only arrives on the following transfer.
+     * This is why the read is performed twice, with the function returning the value the second time. */
     xfer(reg, 0);          // request — reply is stale, discard
     return xfer(reg, 0);   // collect — this is the real value
 }
