@@ -120,6 +120,9 @@ int main(void)
   tmc5160_write(TMC_VSTOP,    10);
 
   tmc5160_write(TMC_XACTUAL,  0);               // zero the position counter
+  tmc5160_write(TMC_XACTUAL, 0x12345678);
+  uint32_t rt = tmc5160_read(TMC_XACTUAL);   // MUST read back 0x12345678
+  __NOP();
 
   /* --- read back what actually landed + fault flags --- */
   uint32_t r_gconf   = tmc5160_read(TMC_GCONF);
