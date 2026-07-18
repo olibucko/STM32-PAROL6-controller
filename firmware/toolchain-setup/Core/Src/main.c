@@ -111,7 +111,7 @@ int main(void)
   tmc5160_write(TMC_A1,       1000);
   tmc5160_write(TMC_V1,       50000);
   tmc5160_write(TMC_AMAX,     500);
-  tmc5160_write(TMC_VMAX,     200000);
+  tmc5160_write(TMC_VMAX,     8000);
   tmc5160_write(TMC_DMAX,     500);
   tmc5160_write(TMC_D1,       1000);
   tmc5160_write(TMC_VSTOP,    10);
@@ -119,7 +119,7 @@ int main(void)
   tmc5160_write(TMC_XACTUAL,  0);          // define current position as zero (clean start)
 
   tmc5160_write(TMC_RAMPMODE, 1);          // Start moving
-  HAL_Delay (2000);
+  HAL_Delay (5000);
   tmc5160_write(TMC_RAMPMODE, 0);			// Stop moving
 
   /* Diagnostics */
