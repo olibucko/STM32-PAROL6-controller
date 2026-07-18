@@ -103,7 +103,7 @@ int main(void)
   tmc5160_write(TMC_GSTAT, 0x07);              // clear reset/error flags
 
   /* --- Current & chopper setup (datasheet quick-config, current-scaled for 2A motor) --- */
-  tmc5160_write(TMC_GCONF,        0x00000000);  // en_pwm_mode = 1 (StealthChop ON)
+  tmc5160_write(TMC_GCONF,        0x00000000);
   tmc5160_write(TMC_GLOBALSCALER, 128);         // ~0.8A current
   tmc5160_write(TMC_CHOPCONF,     0x000100C3);  // TOFF=3, HSTRT=4, HEND=1, TBL=2, SpreadCycle
   tmc5160_write(TMC_IHOLD_IRUN,   0x00061F0A);  // IHOLD=10, IRUN=31 (scaled by GLOBALSCALER), IHOLDDELAY=6
@@ -113,8 +113,8 @@ int main(void)
   /* --- Ramp generator params --- */
   tmc5160_write(TMC_A1,       1000);
   tmc5160_write(TMC_V1,       50000);
-  tmc5160_write(TMC_AMAX,     500);
-  tmc5160_write(TMC_VMAX,     5000);            // Slow velocity
+  tmc5160_write(TMC_AMAX,     100);
+  tmc5160_write(TMC_VMAX,     1000);            // Slow velocity
   tmc5160_write(TMC_DMAX,     700);
   tmc5160_write(TMC_D1,       1400);
   tmc5160_write(TMC_VSTOP,    10);
