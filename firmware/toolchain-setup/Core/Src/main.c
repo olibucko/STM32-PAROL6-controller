@@ -62,6 +62,10 @@ static void MX_SPI2_Init(void);
 static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
 
+void motor_set_dir(uint8_t fwd);
+void motor_set_step_hz(uint32_t f);
+void motor_set_rpm(float rpm);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -117,16 +121,6 @@ int main(void)
   tmc5160_write(TMC_IHOLD_IRUN,   0x00081810);
   tmc5160_write(TMC_TPOWERDOWN,   0x0000000A);
 
-  tmc5160_write(TMC_A1,     1000);
-  tmc5160_write(TMC_V1,     0);
-  tmc5160_write(TMC_AMAX,   5000);
-  tmc5160_write(TMC_VMAX,   30000);
-  tmc5160_write(TMC_DMAX,   700);
-  tmc5160_write(TMC_D1,     1400);   // restored — must be >=1
-  tmc5160_write(TMC_VSTOP,  10);     // restored — must be >=1
-  tmc5160_write(TMC_VSTART, 0);      // explicit; VSTART <= VSTOP
-  tmc5160_write(TMC_XACTUAL, 0);
-
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -135,30 +129,19 @@ int main(void)
   {
 	  while (1)
 	  {
-	      tmc5160_write(TMC_XACTUAL, 0);
-	      tmc5160_write(TMC_VMAX, 30000);
-	      tmc5160_write(TMC_RAMPMODE, 1);        // spin (velocity+)
+		  	  motor_set_dir(1);
+		      motor_set_rpm(30.0f);     // forward, ~30 RPM
+		      HAL_Delay(3000);
 
-	      HAL_Delay(200);                         // let ramp get going
-	      dbg("XACT_a",  tmc5160_read(TMC_XACTUAL));
-	      dbg("VACT",    tmc5160_read(TMC_VACTUAL));
-	      dbg("MSCNT_a", tmc5160_read(TMC_MSCNT));
-	      dbg("DRVSTAT", tmc5160_read(TMC_DRV_STATUS));
-	      dbg("GSTAT",   tmc5160_read(TMC_GSTAT));
-	      dbg("CHOP",    tmc5160_read(TMC_CHOPCONF));
-	      dbg("GCONF",   tmc5160_read(TMC_GCONF));
-	      dbg("IOIN",    tmc5160_read(TMC_IOIN));
+		      motor_set_step_hz(0);     // stop
+		      HAL_Delay(1000);
 
-	      HAL_Delay(2000);                        // spin 2s more
-	      dbg("XACT_b",  tmc5160_read(TMC_XACTUAL));
-	      dbg("MSCNT_b", tmc5160_read(TMC_MSCNT));
+		      motor_set_dir(0);
+		      motor_set_rpm(30.0f);     // reverse
+		      HAL_Delay(3000);
 
-	      tmc5160_write(TMC_VMAX, 0);
-	      HAL_Delay(1000);
-	      tmc5160_write(TMC_RAMPMODE, 3);         // hold
-
-	      HAL_UART_Transmit(&huart2, (uint8_t*)"---- idle ----\r\n", 16, HAL_MAX_DELAY);
-	      HAL_Delay(10000);                       // idle so you can read the block
+		      motor_set_step_hz(0);
+		      HAL_Delay(1000);                      // idle so you can read the block
 	  }
     /* USER CODE END WHILE */
 
@@ -401,6 +384,26 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+	void motor_set_dir(uint8_t fwd)
+	{
+		HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, fwd ? GPIO_PIN_SET : GPIO_PIN_RESET);
+	}
+
+	void motor_set_step_hz(uint32_t f)
+	{
+		if (f == 0) { HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_1); return; }
+		uint32_t arr = (1000000UL / f) - 1;              // 1 MHz tick / f
+		__HAL_TIM_SET_AUTORELOAD(&htim2, arr);
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, arr / 2);   // 50% duty
+		HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+	}
+
+	void motor_set_rpm(float rpm)
+	{
+		uint32_t f = (uint32_t)(rpm * 51200.0f / 60.0f); // 200 steps × 256 µsteps
+		motor_set_step_hz(f);
+	}
 
 /* USER CODE END 4 */
 
