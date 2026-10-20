@@ -52,6 +52,10 @@ UART_HandleTypeDef huart2;
 
 uint32_t val;
 
+volatile int32_t  g_position_steps = 0;   // absolute position, signed, in steps
+volatile uint32_t g_steps_remaining = 0;  // steps left in current move
+volatile int8_t   g_step_dir = 1;         // +1 or -1, applied per step
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -65,6 +69,15 @@ static void MX_TIM2_Init(void);
 void motor_set_dir(uint8_t fwd);
 void motor_set_step_hz(uint32_t f);
 void motor_set_rpm(float rpm);
+
+void move_steps(int32_t n, float rpm);
+void move_to_deg(float deg, float rpm);
+void move_to_rad(float rad, float rpm);
+float get_angle_deg(void);
+float get_angle_rad(void);
+
+void move_wait(void);
+uint8_t move_busy(void);
 
 /* USER CODE END PFP */
 
@@ -127,22 +140,10 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	  while (1)
-	  {
-		  	  motor_set_dir(1);
-		      motor_set_rpm(30.0f);     // forward, ~30 RPM
-		      HAL_Delay(3000);
-
-		      motor_set_step_hz(0);     // stop
-		      HAL_Delay(1000);
-
-		      motor_set_dir(0);
-		      motor_set_rpm(30.0f);     // reverse
-		      HAL_Delay(3000);
-
-		      motor_set_step_hz(0);
-		      HAL_Delay(1000);                      // idle so you can read the block
-	  }
+	  move_to_deg(90.0f, 30.0f);   move_wait();   HAL_Delay(500);
+	  move_to_deg(180.0f, 30.0f);  move_wait();   HAL_Delay(500);
+	  move_to_deg(90.0f, 30.0f);   move_wait();   HAL_Delay(500);
+	  move_to_deg(0.0f, 30.0f);    move_wait();   HAL_Delay(500);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -262,7 +263,7 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 90;
+  htim2.Init.Prescaler = 89;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim2.Init.Period = 999;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -404,6 +405,80 @@ static void MX_GPIO_Init(void)
 		uint32_t f = (uint32_t)(rpm * 51200.0f / 60.0f); // 200 steps × 256 µsteps
 		motor_set_step_hz(f);
 	}
+
+	void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+	{
+	    if (htim->Instance != TIM2) return;
+
+	    if (g_steps_remaining > 0)
+	    {
+	        g_position_steps += g_step_dir;   // one microstep done
+	        g_steps_remaining--;
+
+	        if (g_steps_remaining == 0) {
+	            HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_1);
+	            HAL_TIM_Base_Stop_IT(&htim2);
+	        }
+	    }
+	}
+
+#define STEPS_PER_REV   51200.0f                 // 200 full × 256 µsteps
+#define STEPS_PER_DEG   (STEPS_PER_REV / 360.0f)
+#define STEPS_PER_RAD   (STEPS_PER_REV / 6.2831853f)
+
+/* RPM → step frequency (Hz). Internal helper. */
+static uint32_t rpm_to_hz(float rpm)
+{
+    return (uint32_t)(rpm * STEPS_PER_REV / 60.0f);
+}
+
+/* Relative move: n steps signed, speed in RPM. */
+void move_steps(int32_t n, float rpm)
+{
+    uint32_t hz = rpm_to_hz(rpm);
+    if (n == 0 || hz == 0) return;
+
+    g_step_dir = (n > 0) ? 1 : -1;
+    motor_set_dir(n > 0);
+    g_steps_remaining = (uint32_t)(n > 0 ? n : -n);
+
+    uint32_t arr = (1000000UL / hz) - 1;
+    __HAL_TIM_SET_AUTORELOAD(&htim2, arr);
+    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, arr / 2);
+
+    __HAL_TIM_CLEAR_FLAG(&htim2, TIM_FLAG_UPDATE);
+    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+    HAL_TIM_Base_Start_IT(&htim2);
+}
+
+/* Absolute move to an angle in DEGREES, speed in RPM. */
+void move_to_deg(float deg, float rpm)
+{
+    int32_t target = (int32_t)(deg * STEPS_PER_DEG);
+    move_steps(target - g_position_steps, rpm);
+}
+
+/* Absolute move in RADIANS — kept for the kinematics layer. */
+void move_to_rad(float rad, float rpm)
+{
+    int32_t target = (int32_t)(rad * STEPS_PER_RAD);
+    move_steps(target - g_position_steps, rpm);
+}
+
+float get_angle_deg(void) { return g_position_steps / STEPS_PER_DEG; }
+float get_angle_rad(void) { return g_position_steps / STEPS_PER_RAD; }
+
+/* Block until the current move finishes. */
+void move_wait(void)
+{
+    while (g_steps_remaining > 0) { __NOP(); }
+}
+
+/* True if a move is in progress. Non-blocking — for later use. */
+uint8_t move_busy(void)
+{
+    return (g_steps_remaining > 0);
+}
 
 /* USER CODE END 4 */
 
