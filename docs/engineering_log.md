@@ -39,6 +39,7 @@ Before this, every move started and stopped at full speed instantly. That asks t
 - `VERIFIED` Step count test (12,345 steps, read back from the driver's own counter MSCNT): returned 0x3C7 on 5 out of 5 resets — exactly 12,345 steps every time (driver counts downward with this wiring).
 - `VERIFIED` MSCNT stays constant while idle — no stray steps.
 - `VERIFIED` Waypoint cycle (0° → 90° → 180° → 90° → 0°) runs smoothly and stops cleanly.
+- `VERIFIED` Acceleration demo on B1 (`RUN_ACCEL_DEMO`): 3 revs at 30 rpm/s, 3 revs back at 600 rpm/s, 45° short move (triangle profile), cruise 60 rpm. All smooth, visibly as designed.
 - Not tested: the earlier theory that the *old* Stage D code sent one extra step per move. The old code is gone, so this is left unresolved.
 
 ### Also fixed in this session

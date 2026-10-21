@@ -24,6 +24,7 @@
 #include "tmc5160.h"
 #include <stdio.h>
 #include <math.h>                        // [CHANGE 1] sqrtf for the ramp
+#include <string.h>
 
 /* USER CODE END Includes */
 
@@ -47,6 +48,7 @@
 #define V_START_HZ        500.0f       // first & last step rate; must be > 0
 
 #define RUN_MSCNT_TEST    1            // [CHANGE 9] set 0 once verified
+#define RUN_ACCEL_DEMO    1            // B1 runs the acceleration demo (0 = waypoint cycle)
 
 /* USER CODE END PD */
 
@@ -113,6 +115,13 @@ uint8_t move_busy(void);
 		char buf[48];
 		int n = snprintf(buf, sizeof(buf), "%-10s 0x%08lX\r\n", tag, (unsigned long)v);
 		HAL_UART_Transmit(&huart2, (uint8_t *)buf, n, HAL_MAX_DELAY);
+	}
+
+	/* Print a plain text line over UART. */
+	static void say(const char *msg)
+	{
+		HAL_UART_Transmit(&huart2, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
+		HAL_UART_Transmit(&huart2, (uint8_t *)"\r\n", 2, HAL_MAX_DELAY);
 	}
 
 /* USER CODE END 0 */
@@ -188,10 +197,29 @@ int main(void)
   {
 	    if (HAL_GPIO_ReadPin(B1_GPIO_Port, B1_Pin) == GPIO_PIN_RESET)   // B1 pressed
 	    {
+#if RUN_ACCEL_DEMO
+	        /* Acceleration demo, bare shaft. Cruise 60 rpm = 1 rev/s. */
+	        say("1) Gentle: 30 rpm/s -> 3 revs (2 s up, 1 s cruise, 2 s down)");
+	        set_accel_rpm_s(30.0f);
+	        move_to_deg(1080.0f, 60.0f);  move_wait();  HAL_Delay(1500);
+
+	        say("2) Brisk: 600 rpm/s -> back 3 revs (0.1 s ramps)");
+	        set_accel_rpm_s(600.0f);
+	        move_to_deg(0.0f, 60.0f);     move_wait();  HAL_Delay(1500);
+
+	        say("3) Short move: 45 deg at 120 rpm/s - never reaches 60 rpm (triangle)");
+	        set_accel_rpm_s(120.0f);
+	        move_to_deg(45.0f, 60.0f);    move_wait();  HAL_Delay(1500);
+
+	        say("Return to 0 (120 rpm/s)");
+	        move_to_deg(0.0f, 60.0f);     move_wait();
+	        say("Done - press B1 to run again");
+#else
 	        move_to_deg(90.0f, 30.0f);   move_wait();   HAL_Delay(500);
 	        move_to_deg(180.0f, 30.0f);  move_wait();   HAL_Delay(500);
 	        move_to_deg(90.0f, 30.0f);   move_wait();   HAL_Delay(500);
 	        move_to_deg(0.0f, 30.0f);    move_wait();
+#endif
 	    }
     /* USER CODE END WHILE */
 
