@@ -18,3 +18,7 @@ firmware/toolchain-setup/Debug/Core/Src/main.su
 firmware/toolchain-setup/Debug/toolchain-setup.elf
 firmware/toolchain-setup/Debug/toolchain-setup.list
 firmware/toolchain-setup/Debug/toolchain-setup.map
+
+# Build outputs (STM32CubeIDE)
+firmware/toolchain-setup/Debug/
+firmware/toolchain-setup/Release/

@@ -23,6 +23,7 @@
 /* USER CODE BEGIN Includes */
 #include "tmc5160.h"
 #include <stdio.h>
+#include <math.h>                        // [CHANGE 1] sqrtf for the ramp
 
 /* USER CODE END Includes */
 
@@ -33,6 +34,19 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+
+/* [CHANGE 2] Unit constants moved up from USER CODE 4 so everything below
+ * (accel setter, ramp) can use them. */
+#define STEPS_PER_REV     51200.0f                 // 200 full x 256 usteps
+#define STEPS_PER_DEG     (STEPS_PER_REV / 360.0f)
+#define STEPS_PER_RAD     (STEPS_PER_REV / 6.2831853f)
+
+/* [CHANGE 3] Ramp/timer constants */
+#define TIM_TICK_HZ       1000000.0f   // TIM2 tick: 90 MHz / (PSC 89 + 1)
+#define STEP_PULSE_TICKS  5u           // STEP high time = 5 us (fixed width)
+#define V_START_HZ        500.0f       // first & last step rate; must be > 0
+
+#define RUN_MSCNT_TEST    1            // [CHANGE 9] set 0 once verified
 
 /* USER CODE END PD */
 
@@ -52,9 +66,18 @@ UART_HandleTypeDef huart2;
 
 uint32_t val;
 
-volatile int32_t  g_position_steps = 0;   // absolute position, signed, in steps
-volatile uint32_t g_steps_remaining = 0;  // steps left in current move
-volatile int8_t   g_step_dir = 1;         // +1 or -1, applied per step
+volatile int32_t  g_position_steps  = 0;  // absolute position, signed, in steps
+volatile uint32_t g_steps_remaining = 0;  // steps left in current move (debug/info)
+volatile int8_t   g_step_dir        = 1;  // +1 or -1, applied per step
+
+/* [CHANGE 3] Ramp state */
+volatile uint32_t g_steps_total = 0;      // |n| for current move
+volatile uint32_t g_steps_done  = 0;      // pulses launched so far
+volatile uint8_t  g_moving      = 0;      // 1 until the timer has actually stopped
+
+static float g_vmax  = 0.0f;              // cruise rate, steps/s (per move)
+static float g_two_a = 0.0f;              // 2 x accel, steps/s^2
+static const float g_vstart2 = V_START_HZ * V_START_HZ;
 
 /* USER CODE END PV */
 
@@ -67,8 +90,9 @@ static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
 
 void motor_set_dir(uint8_t fwd);
-void motor_set_step_hz(uint32_t f);
-void motor_set_rpm(float rpm);
+/* [CHANGE 8] motor_set_step_hz / motor_set_rpm removed (free-running, uncounted) */
+
+void set_accel_rpm_s(float rpm_per_s);
 
 void move_steps(int32_t n, float rpm);
 void move_to_deg(float deg, float rpm);
@@ -133,6 +157,22 @@ int main(void)
   tmc5160_write(TMC_CHOPCONF,     0x000100C3);   // TOFF=3, MRES=256
   tmc5160_write(TMC_IHOLD_IRUN,   0x00081810);
   tmc5160_write(TMC_TPOWERDOWN,   0x0000000A);
+
+  set_accel_rpm_s(120.0f);   // [CHANGE 7] 0 -> 30 rpm in 0.25 s (~22.5 deg of travel)
+
+#if RUN_MSCNT_TEST
+  /* [CHANGE 9] Step-count exactness check against the chip itself.
+   * 12345 mod 1024 = 57. Expect d = 57 (or 967 if polarity counts down). */
+  {
+      uint32_t m0 = tmc5160_read(TMC_MSCNT) & 0x3FF;
+      move_steps(12345, 30.0f);  move_wait();
+      HAL_Delay(50);
+      uint32_t m1 = tmc5160_read(TMC_MSCNT) & 0x3FF;
+      dbg("MSCNT d", (m1 - m0) & 0x3FF);
+      move_steps(-12345, 30.0f); move_wait();        // back to 0
+      HAL_Delay(500);
+  }
+#endif
 
   /* USER CODE END 2 */
 
@@ -267,7 +307,7 @@ static void MX_TIM2_Init(void)
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim2.Init.Period = 999;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;   // [CHANGE 4] set in .ioc too
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
   {
     Error_Handler();
@@ -296,6 +336,10 @@ static void MX_TIM2_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN TIM2_Init 2 */
+
+  /* [CHANGE 4] CCR1 preload. HAL_TIM_PWM_ConfigChannel already sets OC1PE;
+   * stated explicitly because the ramp depends on it. */
+  __HAL_TIM_ENABLE_OCxPRELOAD(&htim2, TIM_CHANNEL_1);
 
   /* USER CODE END TIM2_Init 2 */
   HAL_TIM_MspPostInit(&htim2);
@@ -391,64 +435,97 @@ static void MX_GPIO_Init(void)
 		HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, fwd ? GPIO_PIN_SET : GPIO_PIN_RESET);
 	}
 
-	void motor_set_step_hz(uint32_t f)
-	{
-		if (f == 0) { HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_1); return; }
-		uint32_t arr = (1000000UL / f) - 1;              // 1 MHz tick / f
-		__HAL_TIM_SET_AUTORELOAD(&htim2, arr);
-		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, arr / 2);   // 50% duty
-		HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
-	}
-
-	void motor_set_rpm(float rpm)
-	{
-		uint32_t f = (uint32_t)(rpm * 51200.0f / 60.0f); // 200 steps × 256 µsteps
-		motor_set_step_hz(f);
-	}
-
-	void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-	{
-	    if (htim->Instance != TIM2) return;
-
-	    if (g_steps_remaining > 0)
-	    {
-	        g_position_steps += g_step_dir;   // one microstep done
-	        g_steps_remaining--;
-
-	        if (g_steps_remaining == 0) {
-	            HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_1);
-	            HAL_TIM_Base_Stop_IT(&htim2);
-	        }
-	    }
-	}
-
-#define STEPS_PER_REV   51200.0f                 // 200 full × 256 µsteps
-#define STEPS_PER_DEG   (STEPS_PER_REV / 360.0f)
-#define STEPS_PER_RAD   (STEPS_PER_REV / 6.2831853f)
-
-/* RPM → step frequency (Hz). Internal helper. */
+/* RPM -> step frequency (Hz). Internal helper. */
 static uint32_t rpm_to_hz(float rpm)
 {
     return (uint32_t)(rpm * STEPS_PER_REV / 60.0f);
 }
 
-/* Relative move: n steps signed, speed in RPM. */
+/* [CHANGE 7] Acceleration in rpm/s -> 2a in steps/s^2. Call only while !g_moving. */
+void set_accel_rpm_s(float rpm_per_s)
+{
+    g_two_a = 2.0f * rpm_per_s * STEPS_PER_REV / 60.0f;
+}
+
+/* [CHANGE 5] Ramp: step rate for a pulse `from_start` steps into the move,
+ * with `to_end` steps still to follow it.
+ * Constant accel => v^2 = v0^2 + 2*a*s. min(accel limb, decel limb, vmax)
+ * is the trapezoid; short moves become triangles automatically. */
+static uint32_t ramp_arr(uint32_t from_start, uint32_t to_end)
+{
+    float v_up = sqrtf(g_vstart2 + g_two_a * (float)from_start);
+    float v_dn = sqrtf(g_vstart2 + g_two_a * (float)to_end);
+    float v    = (v_up < v_dn) ? v_up : v_dn;
+    if (v > g_vmax) v = g_vmax;
+
+    uint32_t arr = (uint32_t)(TIM_TICK_HZ / v + 0.5f) - 1u;
+    if (arr < 2u * STEP_PULSE_TICKS) arr = 2u * STEP_PULSE_TICKS;  // keep a low gap
+    return arr;
+}
+
+/* [CHANGE 5] Write preload regs for the period AFTER the one now running. */
+static void load_next_period(void)
+{
+    if (g_steps_done >= g_steps_total) {
+        /* All pulses launched: next period is blank (CCR=0 -> pin stays low).
+         * Its update event is where the ISR stops the timer. */
+        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
+    } else {
+        uint32_t from_start = g_steps_done;
+        uint32_t to_end     = g_steps_total - g_steps_done - 1u;
+        __HAL_TIM_SET_AUTORELOAD(&htim2, ramp_arr(from_start, to_end));
+        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, STEP_PULSE_TICKS);
+    }
+}
+
+/* [CHANGE 6] ISR: fires at the start of every period, after preload -> shadow. */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance != TIM2) return;
+
+    if (g_steps_done >= g_steps_total) {          // blank period began -> done
+        HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_1);
+        __HAL_TIM_DISABLE_IT(&htim2, TIM_IT_UPDATE);
+        g_moving = 0;
+        return;
+    }
+
+    /* Hardware has just launched the next STEP pulse. */
+    g_steps_done++;
+    g_steps_remaining = g_steps_total - g_steps_done;
+    g_position_steps += g_step_dir;
+
+    load_next_period();
+}
+
+/* [CHANGE 6] Relative move: n steps signed, cruise speed in RPM. */
 void move_steps(int32_t n, float rpm)
 {
     uint32_t hz = rpm_to_hz(rpm);
-    if (n == 0 || hz == 0) return;
+    if (n == 0 || hz == 0 || g_moving) return;
 
     g_step_dir = (n > 0) ? 1 : -1;
     motor_set_dir(n > 0);
-    g_steps_remaining = (uint32_t)(n > 0 ? n : -n);
 
-    uint32_t arr = (1000000UL / hz) - 1;
-    __HAL_TIM_SET_AUTORELOAD(&htim2, arr);
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, arr / 2);
+    g_steps_total = (uint32_t)(n > 0 ? n : -n);
+    g_vmax        = (float)hz;
+    g_moving      = 1;
 
-    __HAL_TIM_CLEAR_FLAG(&htim2, TIM_FLAG_UPDATE);
+    /* Period 1: write preload, UG copies it to shadow and zeroes CNT. */
+    __HAL_TIM_SET_AUTORELOAD(&htim2, ramp_arr(0, g_steps_total - 1u));
+    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, STEP_PULSE_TICKS);
+    htim2.Instance->EGR = TIM_EGR_UG;
+    __HAL_TIM_CLEAR_FLAG(&htim2, TIM_FLAG_UPDATE);   // UG sets UIF; discard
+
+    /* PWM1: pin goes high the instant the counter runs (CNT=0 < CCR),
+     * so pulse 1 is launched by the start itself — count it here. */
+    g_steps_done      = 1;
+    g_steps_remaining = g_steps_total - 1u;
+    g_position_steps += g_step_dir;
+    load_next_period();                              // preload period 2 (or blank)
+
+    __HAL_TIM_ENABLE_IT(&htim2, TIM_IT_UPDATE);
     HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
-    HAL_TIM_Base_Start_IT(&htim2);
 }
 
 /* Absolute move to an angle in DEGREES, speed in RPM. */
@@ -468,16 +545,16 @@ void move_to_rad(float rad, float rpm)
 float get_angle_deg(void) { return g_position_steps / STEPS_PER_DEG; }
 float get_angle_rad(void) { return g_position_steps / STEPS_PER_RAD; }
 
-/* Block until the current move finishes. */
+/* [CHANGE 6] Block until the timer has actually stopped. */
 void move_wait(void)
 {
-    while (g_steps_remaining > 0) { __NOP(); }
+    while (g_moving) { __NOP(); }
 }
 
-/* True if a move is in progress. Non-blocking — for later use. */
+/* [CHANGE 6] True while a move is in progress. Non-blocking. */
 uint8_t move_busy(void)
 {
-    return (g_steps_remaining > 0);
+    return g_moving;
 }
 
 /* USER CODE END 4 */
