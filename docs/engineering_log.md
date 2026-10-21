@@ -10,42 +10,45 @@ Dated lab notebook for `stm32-PAROL6-controller`. Records what was tried, what h
 
 ---
 
-## 2026-10-21 — Stage D2: Trapezoidal accel/decel ramping (single axis)
+## 2026-10-21 — Stage D2: Smooth acceleration/deceleration (single axis)
 
-**Status:** `UNTESTED` — written and merged into `main.c`, not yet flashed.
+**Status:** `VERIFIED` — smooth moves, exact step count, no drift at rest. Bare shaft, no load.
 
-### Objective
-Replace instant-on step rate with a trapezoidal speed profile (accelerate → cruise → decelerate). Instant-on demands infinite acceleration torque at t=0 → missed steps under load → silent open-loop position error. Prerequisite for loaded position control.
+### Goal
+Before this, every move started and stopped at full speed instantly. That asks the motor for infinite acceleration, which it can't deliver once there's a load on it — it would skip steps without the firmware knowing. The goal was to make each move speed up gradually, cruise, then slow down gradually ("trapezoidal" speed profile).
 
-### Design
-- **Per-step speed from position within the move:**
-  `speed = min( √(v₀² + 2a·steps_done), √(v₀² + 2a·steps_to_go), vmax )`
-  From v² = v₀² + 2as with distance in steps. Stateless (no phase state machine, no accumulated error); short moves become triangular automatically.
-- **TIM2** generates pulses in hardware (1 MHz tick, PSC=89). **TIM2 ISR** runs once per step: records the step just begun, computes the *next* step's period (ARR), writes it to preload — always one step ahead.
-- **ARR/CCR preload enabled** so changes apply from the next step period, never mid-period.
-- **Blank final period** (CCR=0, no pulse); timer stops at the reset after it → exactly N pulses.
-- Fixed 5 µs STEP pulse; V_START = 500 Hz; bench accel 120 rpm/s (0→30 rpm in 0.25 s, ~22.5° travel).
+### How it works
+- **Speed of each step depends on where it sits in the move.** For every step the code works out three speeds and uses the smallest:
+  1. how fast it could be going after speeding up from the start: √(v₀² + 2a × steps done)
+  2. how fast it can be going and still slow down in time for the end: √(v₀² + 2a × steps left)
+  3. the requested cruise speed.
+  These come from the standard constant-acceleration equation v² = v₀² + 2as, with distance measured in steps. Short moves never reach cruise speed and become a triangle shape automatically.
+- **TIM2 makes the pulses in hardware.** After each step, an interrupt (a function the hardware triggers automatically) counts the step and sets up the timing of the *next* step. Timer "preload" is turned on so a new timing value only takes effect at the start of the next step, never halfway through one.
+- **Clean finish:** after the last real step, the timer runs one extra empty period with no pulse, and stops at the end of it. This guarantees exactly the requested number of pulses.
+- Settings: first/last step at 500 steps/s, fixed 5 µs pulse, test acceleration 120 rpm/s (0 → 30 rpm in 0.25 s).
+- Motion now only runs when the blue button (B1) is pressed — the resting state is "stopped".
 
-### Changes to `main.c`
-- `math.h`; `STEPS_PER_*` moved to USER CODE PD.
-- New: `TIM_TICK_HZ`, `STEP_PULSE_TICKS`, `V_START_HZ`; state `g_steps_total`, `g_steps_done`, `g_moving`.
-- TIM2 `AutoReloadPreload = ENABLE` — **must also be set in .ioc or regen reverts it.**
-- New `ramp_arr()`, `load_next_period()`, `set_accel_rpm_s()`. Rewrote `move_steps()` and ISR. `move_wait()` / `move_busy()` now poll `g_moving`.
-- Removed `motor_set_step_hz()` / `motor_set_rpm()` — unused, free-running, uncounted (safety hazard).
+### Bug found and fixed — motor creeping when it should be stopped
+- **Symptom:** after a move finished, the motor kept slowly ticking forward in the last direction it moved, forever.
+- **Evidence:** the step-count test returned +7, +7, +32, +42 extra steps on four runs. A code mistake would give the same error every time; a different error each run meant something random was adding steps.
+- **Cause:** at the end of a move, the code switched off the STM32's output on the STEP pin, leaving the wire *floating* (connected to nothing). A floating wire picks up electrical noise from the motor and driver, and the driver counted each noise spike as a step.
+- **Fix:** keep the output switched on and held **low** while idle; just pause the timer between moves. Held low from boot as well.
+- **Lesson:** never leave a digital input floating — something must always hold it at a definite level. For the PCB: add a 10 kΩ pull-down resistor on STEP (and DIR) so the line stays low even while the STM32 is in reset.
 
-### Findings
-- `THEORY` **Old code sends +1 step per move.** In PWM1 mode the pin rises in hardware at every update, the same instant the ISR runs — so stopping at the Nth update had already launched pulse N+1. The waypoint loop (+,+,−,−) cancels the error, hiding it. Blank-period design fixes it.
-- Without ARR preload, writing an ARR below the current count makes 32-bit TIM2 overrun to 2³² (~72 min stall).
-- `g_steps_remaining` reaches 0 one period before the timer stops → can't be used as the "move complete" signal; added `g_moving`.
-- An ISR is a hardware-triggered function, not inherently a counter — here it counts steps *and* controls the next step's timing.
+### Results
+- `VERIFIED` Step count test (12,345 steps, read back from the driver's own counter MSCNT): returned 0x3C7 on 5 out of 5 resets — exactly 12,345 steps every time (driver counts downward with this wiring).
+- `VERIFIED` MSCNT stays constant while idle — no stray steps.
+- `VERIFIED` Waypoint cycle (0° → 90° → 180° → 90° → 0°) runs smoothly and stops cleanly.
+- Not tested: the earlier theory that the *old* Stage D code sent one extra step per move. The old code is gone, so this is left unresolved.
+
+### Also fixed in this session
+- `.ioc` timer prescaler was 90 while `main.c` had 89 — regenerating code would have made every speed ~1% slow. Set to 89, and timer preload enabled in the `.ioc` so regeneration keeps it.
+- Build output folder (`Debug/`) removed from git tracking.
 
 ### Next
-1. (Optional baseline) MSCNT test on old code — expect Δ = 58 if +1 bug is real.
-2. Add `TMC_MSCNT` (0x6A) to `tmc5160_regs.h` if missing; verify in datasheet MSCNT advances 1 per step at MRES=256.
-3. Flash new code — MSCNT test expects Δ = 57 (0x39), or 967 (0x3C7) if polarity counts down.
-4. Waypoint loop: smooth start/stop, no clunk.
-5. Later: PSC=0 (90 MHz tick) for speed resolution at high rpm (~5% quantisation at 60 rpm currently).
-6. Then assemble joint 1 → Stage E (homing); tune accel under real load.
+1. At high speeds the timer can only adjust speed in ~5% jumps (at 60 rpm). Fix later by running the timer clock faster (prescaler 0).
+2. Assemble joint 1 → Stage E (homing). Tune acceleration under real load.
+3. Stage F: power-up safety — the motor driver should stay disabled until the firmware says it's safe.
 
 ---
 
