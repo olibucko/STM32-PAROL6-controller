@@ -180,10 +180,13 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	  move_to_deg(90.0f, 30.0f);   move_wait();   HAL_Delay(500);
-	  move_to_deg(180.0f, 30.0f);  move_wait();   HAL_Delay(500);
-	  move_to_deg(90.0f, 30.0f);   move_wait();   HAL_Delay(500);
-	  move_to_deg(0.0f, 30.0f);    move_wait();   HAL_Delay(500);
+	    if (HAL_GPIO_ReadPin(B1_GPIO_Port, B1_Pin) == GPIO_PIN_RESET)   // B1 pressed
+	    {
+	        move_to_deg(90.0f, 30.0f);   move_wait();   HAL_Delay(500);
+	        move_to_deg(180.0f, 30.0f);  move_wait();   HAL_Delay(500);
+	        move_to_deg(90.0f, 30.0f);   move_wait();   HAL_Delay(500);
+	        move_to_deg(0.0f, 30.0f);    move_wait();
+	    }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
