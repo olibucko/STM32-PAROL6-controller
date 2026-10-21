@@ -158,6 +158,12 @@ int main(void)
   tmc5160_write(TMC_IHOLD_IRUN,   0x00081810);
   tmc5160_write(TMC_TPOWERDOWN,   0x0000000A);
 
+  /* STEP idle state: output enabled, CCR=0 -> PA0 driven LOW, counter stopped. */
+  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
+  htim2.Instance->EGR  = TIM_EGR_UG;                 // load CCR=0 into shadow
+  __HAL_TIM_CLEAR_FLAG(&htim2, TIM_FLAG_UPDATE);
+  htim2.Instance->CCER |= TIM_CCER_CC1E;             // enable output (counter still off)
+
   set_accel_rpm_s(120.0f);   // [CHANGE 7] 0 -> 30 rpm in 0.25 s (~22.5 deg of travel)
 
 #if RUN_MSCNT_TEST
@@ -487,7 +493,10 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     if (htim->Instance != TIM2) return;
 
     if (g_steps_done >= g_steps_total) {          // blank period began -> done
-        HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_1);
+        /* Stop the COUNTER only. CC1E stays on and CCR=0 (blank period), so
+         * PA0 is actively driven LOW while idle. Disabling the channel
+         * (HAL_TIM_PWM_Stop) left STEP floating -> noise counted as steps. */
+        htim2.Instance->CR1 &= ~TIM_CR1_CEN;
         __HAL_TIM_DISABLE_IT(&htim2, TIM_IT_UPDATE);
         g_moving = 0;
         return;
@@ -528,7 +537,7 @@ void move_steps(int32_t n, float rpm)
     load_next_period();                              // preload period 2 (or blank)
 
     __HAL_TIM_ENABLE_IT(&htim2, TIM_IT_UPDATE);
-    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+    htim2.Instance->CR1 |= TIM_CR1_CEN;              // CC1E already on since boot
 }
 
 /* Absolute move to an angle in DEGREES, speed in RPM. */
