@@ -34,8 +34,8 @@
 /* ---- State kept for each joint --------------------------------------- */
 static axis_t   *s_axes[MOTION_MAX_AXES];
 static uint8_t   s_count = 0;
-static float     s_speed_rpm[MOTION_MAX_AXES];     /* default cruise speed */
-static float     s_accel_rpm_s[MOTION_MAX_AXES];   /* current acceleration */
+static float     s_speed_rpm[MOTION_MAX_AXES];     /* speed used when a move
+                                                    * command gives none   */
 static uint32_t  s_done_reported[MOTION_MAX_AXES]; /* moves already told to
                                                     * the PC as DONE        */
 
@@ -112,13 +112,23 @@ static int parse_joint(const char *s)
     return (int)(j - 1);
 }
 
-/* Turn a MOTION_ERR_... result into an ERR reply for joint index i. */
-static void reply_motion_error(int i, int result)
+/* Turn a MOTION_ERR_... result into an ERR reply for joint index i.
+ * `target_deg` is only used for MOTION_ERR_RANGE. */
+static void reply_motion_error(int i, int result, float target_deg)
 {
     char r[REPLY_MAX], lim[16];
     if (result == MOTION_ERR_BUSY)
     {
         snprintf(r, sizeof r, "ERR %d busy: wait for DONE, or send STOP", i + 1);
+    }
+    else if (result == MOTION_ERR_RANGE)
+    {
+        char tgt[16], lo[16], hi[16];
+        fmt_3dp(tgt, sizeof tgt, target_deg);
+        fmt_3dp(lo,  sizeof lo,  s_axes[i]->min_deg);
+        fmt_3dp(hi,  sizeof hi,  s_axes[i]->max_deg);
+        snprintf(r, sizeof r, "ERR %d target %s is outside the range %s to %s deg",
+                 i + 1, tgt, lo, hi);
     }
     else
     {
@@ -126,6 +136,26 @@ static void reply_motion_error(int i, int result)
         snprintf(r, sizeof r, "ERR %d speed must be above 0 and at most %s rpm",
                  i + 1, lim);
     }
+    serial_println(r);
+}
+
+/* Start a move of n microsteps on joint index i, and send the reply:
+ *   OK j from=<deg> to=<deg>     or     ERR ...
+ * All three move commands (MOVE, MOVEREL, STEPS) come through here, so
+ * they all report and refuse things the same way. */
+static void start_move(int i, int32_t n, float rpm)
+{
+    axis_t *ax = s_axes[i];
+    float from_deg = motion_get_angle_deg(ax);
+    float to_deg   = (float)((int64_t)ax->position_steps + n) / ax->steps_per_deg;
+
+    int result = motion_move_steps(ax, n, rpm);
+    if (result != MOTION_OK) { reply_motion_error(i, result, to_deg); return; }
+
+    char f[16], t[16], r[REPLY_MAX];
+    fmt_3dp(f, sizeof f, from_deg);
+    fmt_3dp(t, sizeof t, to_deg);
+    snprintf(r, sizeof r, "OK %d from=%s to=%s", i + 1, f, t);
     serial_println(r);
 }
 
@@ -166,10 +196,28 @@ static void cmd_status(int ntok, char **tok)
     char pos[16], spd[16], acc[16], r[REPLY_MAX];
     fmt_3dp(pos, sizeof pos, motion_get_angle_deg(ax));
     fmt_3dp(spd, sizeof spd, s_speed_rpm[i]);
-    fmt_3dp(acc, sizeof acc, s_accel_rpm_s[i]);
+    fmt_3dp(acc, sizeof acc, ax->accel_rpm_s);
     snprintf(r, sizeof r, "OK %d pos=%s moving=%u left=%lu speed=%s accel=%s",
              i + 1, pos, (unsigned)motion_busy(ax),
              (unsigned long)motion_steps_remaining(ax), spd, acc);
+    serial_println(r);
+}
+
+static void cmd_info(int ntok, char **tok)
+{
+    if (ntok != 2) { serial_println("ERR usage: INFO j"); return; }
+    int i = parse_joint(tok[1]);
+    if (i < 0) return;
+
+    axis_t *ax = s_axes[i];
+    char lo[16], hi[16], gr[16], vr[16], ar[16], r[REPLY_MAX];
+    fmt_3dp(lo, sizeof lo, ax->min_deg);
+    fmt_3dp(hi, sizeof hi, ax->max_deg);
+    fmt_3dp(gr, sizeof gr, ax->gear_ratio);
+    fmt_3dp(vr, sizeof vr, ax->max_rpm);
+    fmt_3dp(ar, sizeof ar, ax->max_accel_rpm_s);
+    snprintf(r, sizeof r, "OK %d min=%s max=%s gear=%s max_rpm=%s max_accel=%s",
+             i + 1, lo, hi, gr, vr, ar);
     serial_println(r);
 }
 
@@ -183,9 +231,11 @@ static void cmd_move(int ntok, char **tok)
     if (!parse_float(tok[2], &deg)) { serial_println("ERR deg must be a number"); return; }
     if (!optional_rpm(ntok, tok, 3, i, &rpm)) return;
 
-    int result = motion_move_to_deg(s_axes[i], deg, rpm);
-    if (result == MOTION_OK) serial_println("OK");
-    else                     reply_motion_error(i, result);
+    /* Absolute target in steps, minus where we are = how far to go.
+     * (Same sum as motion_move_to_deg, done here so start_move can report
+     * the plan.) */
+    int32_t target = motion_deg_to_steps(s_axes[i], deg);
+    start_move(i, target - s_axes[i]->position_steps, rpm);
 }
 
 static void cmd_moverel(int ntok, char **tok)
@@ -199,10 +249,8 @@ static void cmd_moverel(int ntok, char **tok)
     if (!optional_rpm(ntok, tok, 3, i, &rpm)) return;
 
     /* Degrees -> steps, relative to wherever the joint is now. */
-    int32_t n = (int32_t)(deg * s_axes[i]->steps_per_deg);
-    int result = motion_move_steps(s_axes[i], n, rpm);
-    if (result == MOTION_OK) serial_println("OK");
-    else                     reply_motion_error(i, result);
+    int32_t n = motion_deg_to_steps(s_axes[i], deg);
+    start_move(i, n, rpm);
 }
 
 static void cmd_steps(int ntok, char **tok)
@@ -222,9 +270,7 @@ static void cmd_steps(int ntok, char **tok)
     }
     if (!optional_rpm(ntok, tok, 3, i, &rpm)) return;
 
-    int result = motion_move_steps(s_axes[i], (int32_t)n, rpm);
-    if (result == MOTION_OK) serial_println("OK");
-    else                     reply_motion_error(i, result);
+    start_move(i, (int32_t)n, rpm);
 }
 
 static void cmd_speed(int ntok, char **tok)
@@ -236,7 +282,7 @@ static void cmd_speed(int ntok, char **tok)
     float rpm;
     if (!parse_float(tok[2], &rpm) || rpm <= 0.0f || rpm > s_axes[i]->max_rpm)
     {
-        reply_motion_error(i, MOTION_ERR_LIMIT);
+        reply_motion_error(i, MOTION_ERR_LIMIT, 0.0f);
         return;
     }
     s_speed_rpm[i] = rpm;   /* only used by later moves, so fine while moving */
@@ -255,12 +301,11 @@ static void cmd_accel(int ntok, char **tok)
     int result = motion_set_accel_rpm_s(s_axes[i], a);
     if (result == MOTION_OK)
     {
-        s_accel_rpm_s[i] = a;
         serial_println("OK");
     }
     else if (result == MOTION_ERR_BUSY)
     {
-        reply_motion_error(i, result);
+        reply_motion_error(i, result, 0.0f);
     }
     else
     {
@@ -280,7 +325,7 @@ static void cmd_zero(int ntok, char **tok)
 
     int result = motion_set_zero(s_axes[i]);
     if (result == MOTION_OK) serial_println("OK");
-    else                     reply_motion_error(i, result);
+    else                     reply_motion_error(i, result, 0.0f);
 }
 
 /* STOP and HALT share the same shape: one joint, or all if none given. */
@@ -352,7 +397,7 @@ static void cmd_wreg(int ntok, char **tok)
     /* Changing driver settings (current, chopper, microsteps) in the middle
      * of a move could make the motor jerk or lose steps, so only allow it
      * while the joint is still. */
-    if (motion_busy(s_axes[i])) { reply_motion_error(i, MOTION_ERR_BUSY); return; }
+    if (motion_busy(s_axes[i])) { reply_motion_error(i, MOTION_ERR_BUSY, 0.0f); return; }
 
     tmc5160_write((uint8_t)reg, value);
     serial_println("OK");
@@ -375,7 +420,8 @@ static const command_t s_commands[] =
     { "HELP",    cmd_help,    "HELP                  list commands" },
     { "PING",    cmd_ping,    "PING                  check the link" },
     { "STATUS",  cmd_status,  "STATUS j              position and settings" },
-    { "MOVE",    cmd_move,    "MOVE j deg [rpm]      go to an angle" },
+    { "INFO",    cmd_info,    "INFO j                fixed range and limits" },
+    { "MOVE",    cmd_move,    "MOVE j deg [rpm]      go to an absolute angle" },
     { "MOVEREL", cmd_moverel, "MOVEREL j deg [rpm]   move by an amount" },
     { "STEPS",   cmd_steps,   "STEPS j n [rpm]       move by n microsteps" },
     { "SPEED",   cmd_speed,   "SPEED j rpm           default speed" },
@@ -412,9 +458,7 @@ void command_init(axis_t *const axes[], uint8_t count)
     for (uint8_t i = 0; i < count; i++)
     {
         s_axes[i]          = axes[i];
-        s_speed_rpm[i]     = CMD_DEFAULT_SPEED_RPM;
-        s_accel_rpm_s[i]   = CMD_DEFAULT_ACCEL_RPM_S;
-        motion_set_accel_rpm_s(axes[i], CMD_DEFAULT_ACCEL_RPM_S);
+        s_speed_rpm[i]     = axes[i]->default_rpm;     /* from joints.c */
         s_done_reported[i] = axes[i]->moves_finished;  /* nothing to report yet */
     }
 }

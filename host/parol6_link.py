@@ -6,7 +6,8 @@ Two ways to use this file:
 
 1. As a terminal (type commands, see replies):
        python parol6_link.py
-       python parol6_link.py --port COM5        (if it can't find the board)
+       python parol6_link.py COM7               (if it can't find the board)
+       python parol6_link.py --port COM7        (same thing, longer form)
    Type HELP for the list of commands, or "quit" to exit.
 
 2. As a library in your own scripts (tests, tuning, later the kinematics):
@@ -14,6 +15,10 @@ Two ways to use this file:
        arm = Parol6Link()            # finds and opens the board
        arm.move(1, 90)               # waits until the move is DONE
        print(arm.status(1))          # {'pos': 90.0, 'moving': 0, ...}
+       print(arm.info(1))            # fixed range and limits from joints.c
+
+   Angles and speeds are for the JOINT (after the 6.4:1 belt on joint 1),
+   and MOVE is ABSOLUTE: 0 = standby, or wherever ZERO was last sent.
 
 Built-in bench test:
        python parol6_link.py --test-steps
@@ -83,6 +88,8 @@ class Parol6Link:
         self._done = queue.Queue()        # (joint, pos) from DONE lines
         self._lock = threading.Lock()     # one command at a time
         self._running = True
+        self._bytes_received = 0          # for the "no reply" diagnosis
+        self._last_lines = []             # last few lines seen, any kind
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
         self._reader.start()
 
@@ -90,7 +97,32 @@ class Parol6Link:
         # half-typed command left in its buffer, then PING checks it answers.
         self._ser.write(b"\n")
         time.sleep(0.05)
-        self.send("PING")
+        try:
+            self.send("PING")
+        except ControllerError:
+            self.close()
+            raise ControllerError(self._explain_no_reply(port)) from None
+
+    def _explain_no_reply(self, port):
+        """Turn a silent first PING into a message that says what to check.
+
+        The port opened, so the USB link to the ST-LINK is fine. What's left
+        is whether the STM32 is running firmware that answers."""
+        if self._bytes_received == 0:
+            seen = "Nothing at all came back."
+        else:
+            seen = (f"{self._bytes_received} bytes came back, but no OK/ERR reply. "
+                    f"Last lines: {self._last_lines}")
+        return (
+            f"{port} opened, but the controller didn't answer PING. {seen}\n"
+            "Usual causes, most likely first:\n"
+            "  1. The board is running older firmware without serial commands.\n"
+            "     In CubeIDE: right-click the project > Refresh (F5) so it sees\n"
+            "     serial.c and command.c, then build and flash again.\n"
+            "  2. The debugger has the chip paused (Debug mode stops at main()).\n"
+            "     Press Resume (F8), or press the black reset button.\n"
+            "  3. Wrong port: try  python -m serial.tools.list_ports -v\n"
+            "     and look for 'STMicroelectronics STLink Virtual COM Port'.")
 
     # ---- the background reader ---------------------------------------
     def _read_loop(self):
@@ -98,9 +130,11 @@ class Parol6Link:
             raw = self._ser.readline()          # one line, or b"" on timeout
             if not raw:
                 continue
+            self._bytes_received += len(raw)
             line = raw.decode("ascii", errors="replace").strip()
             if not line:
                 continue
+            self._last_lines = (self._last_lines + [line])[-3:]
             if line.startswith("OK") or line.startswith("ERR"):
                 self._replies.put(line)
             elif line.startswith("DONE"):
@@ -179,6 +213,12 @@ class Parol6Link:
             result[key] = float(value) if "." in value else int(value)
         return result
 
+    def info(self, joint):
+        """The joint's fixed settings, e.g. {'min': -123.047, 'max': 123.047,
+        'gear': 6.4, 'max_rpm': 9.375, 'max_accel': 93.75}"""
+        text = self.send(f"INFO {joint}")
+        return {k: float(v) for k, v in (w.split("=") for w in text.split()[1:])}
+
     def read_reg(self, joint, reg):
         text = self.send(f"RREG {joint} 0x{reg:02X}")   # "1 reg=0x6A val=0x..."
         return int(text.split("val=")[1], 16)
@@ -212,7 +252,7 @@ def test_step_count(arm, joint=1, n=12345, runs=5):
     all_ok = True
     for run in range(1, runs + 1):
         m0 = arm.read_reg(joint, TMC_MSCNT) & 0x3FF
-        arm.steps(joint, n, 30)
+        arm.steps(joint, n)               # joint's default speed
         time.sleep(0.05)
         m1 = arm.read_reg(joint, TMC_MSCNT) & 0x3FF
         d = (m1 - m0) % 1024
@@ -220,7 +260,7 @@ def test_step_count(arm, joint=1, n=12345, runs=5):
         all_ok &= ok
         print(f"run {run}: driver counted change {d} (0x{d:03X})  "
               f"{'OK' if ok else 'WRONG - expected ' + ' or '.join(map(str, sorted(expect)))}")
-        arm.steps(joint, -n, 30)          # back to where we started
+        arm.steps(joint, -n)              # back to where we started
     print("STEP COUNT TEST:", "PASSED" if all_ok else "FAILED")
     return all_ok
 
@@ -248,11 +288,18 @@ def terminal(arm):
 
 def main():
     ap = argparse.ArgumentParser(description="PAROL6 controller link")
-    ap.add_argument("--port", help="serial port, e.g. COM5 (found automatically if left out)")
+    ap.add_argument("port_pos", nargs="?", metavar="PORT",
+                    help="serial port, e.g. COM7 (found automatically if left out)")
+    ap.add_argument("--port", help="same as PORT, longer form")
     ap.add_argument("--test-steps", action="store_true", help="run the step-count bench test")
     args = ap.parse_args()
 
-    arm = Parol6Link(args.port)
+    port = args.port or args.port_pos
+    try:
+        arm = Parol6Link(port)
+    except ControllerError as e:
+        # Print the explanation on its own, without a long Python traceback.
+        sys.exit(f"ERROR: {e}")
     try:
         if args.test_steps:
             test_step_count(arm)

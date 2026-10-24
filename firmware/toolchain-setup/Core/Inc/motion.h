@@ -15,12 +15,12 @@
  *   arm there will be six, and this file does not need to change.
  *
  * HOW TO USE IT (example for one joint)
- *   1. In main.c, fill in an axis_t with the timer, pins and units for that
- *      motor (see `joint1` in main.c).
+ *   1. In joints.c, fill in an axis_t with the timer, pins, units and limits
+ *      for that joint (see `joint1` there).
  *   2. After CubeMX has set up the timers and pins, call motion_init(&joint1).
- *   3. Set an acceleration:  motion_set_accel_rpm_s(&joint1, 120.0f);
- *   4. Move:                 motion_move_to_deg(&joint1, 90.0f, 30.0f);
- *   5. Either wait:          motion_wait(&joint1);
+ *      This also applies the joint's default acceleration.
+ *   3. Move:                 motion_move_to_deg(&joint1, 90.0f, 5.0f);
+ *   4. Either wait:          motion_wait(&joint1);
  *      or keep working and check later: if (!motion_busy(&joint1)) { ... }
  *
  * UNITS
@@ -60,6 +60,8 @@
 #define MOTION_ERR_BUSY   (-1)  /* refused: the axis is still moving         */
 #define MOTION_ERR_LIMIT  (-2)  /* refused: speed or acceleration is zero,
                                  * negative, or above the axis's limit       */
+#define MOTION_ERR_RANGE  (-3)  /* refused: the move would end outside the
+                                 * joint's range (min_deg .. max_deg)        */
 
 /**
  * axis_t — everything about one motor.
@@ -113,10 +115,22 @@ typedef struct
                                  * zero: a speed of zero would mean an
                                  * infinitely long wait for the first step.  */
 
-    /* Limits. Requests above these are refused, so a typing mistake on the
-     * PC (say 600 rpm instead of 60) can't throw the joint around.          */
+    /* Speed limits. Requests above these are refused, so a typing mistake
+     * on the PC (say 600 rpm instead of 6) can't throw the joint around.    */
     float max_rpm;              /* fastest allowed JOINT speed, rpm          */
     float max_accel_rpm_s;      /* largest allowed JOINT acceleration, rpm/s */
+
+    /* Defaults: used when a command doesn't give a value. Must be within
+     * the limits above, or motion_init() refuses the settings.              */
+    float default_rpm;          /* JOINT rpm                                 */
+    float default_accel_rpm_s;  /* JOINT rpm/s, applied by motion_init()     */
+
+    /* Range limits, in JOINT degrees. A move whose END point would be
+     * outside min_deg..max_deg is refused. (A move that starts outside,
+     * e.g. after a ZERO in the wrong place, is allowed if it ends inside,
+     * so the joint can always be brought back into range.)                  */
+    float min_deg;
+    float max_deg;
 
     /* ---- 2. WORKED OUT by motion_init() -- do not set ------------------- */
 
@@ -128,6 +142,9 @@ typedef struct
                                  * timers only to 16 bits = 65,535)          */
     float    vstart_sq;         /* v_start_hz squared (used in the ramp sum) */
     float    two_a;             /* 2 x acceleration, in steps per second^2   */
+    float    accel_rpm_s;       /* the acceleration now in use, JOINT rpm/s  */
+    int32_t  min_steps;         /* min_deg converted to microsteps           */
+    int32_t  max_steps;         /* max_deg converted to microsteps           */
 
     /* ---- 3. LIVE STATE (changes during moves) --------------------------- */
 
@@ -171,9 +188,11 @@ int motion_set_zero(axis_t *ax);
 /* All three return straight away; the timer does the rest in the background.
  * Speeds are the cruise (top) speed in JOINT rpm; short moves may never
  * reach it.
- * Each returns MOTION_OK (move started), MOTION_ERR_BUSY (the last move is
- * still running — nothing changed) or MOTION_ERR_LIMIT (speed out of range
- * — nothing changed). */
+ * Each returns MOTION_OK (move started), or one of these, in which case
+ * nothing has changed:
+ *   MOTION_ERR_BUSY   the last move is still running
+ *   MOTION_ERR_LIMIT  speed out of range
+ *   MOTION_ERR_RANGE  the end point is outside min_deg..max_deg */
 
 /* Move by a signed number of microsteps from wherever the axis is now. */
 int motion_move_steps(axis_t *ax, int32_t n, float rpm);
@@ -217,6 +236,11 @@ uint8_t motion_busy(const axis_t *ax);
 
 /* How many steps of the current move are still to be sent (0 when idle). */
 uint32_t motion_steps_remaining(const axis_t *ax);
+
+/* JOINT angle in degrees -> motor microsteps, rounded to the NEAREST
+ * microstep (simply cutting off the fraction would make 40 deg come out as
+ * 39.999 deg). Use this for every degrees-to-steps conversion. */
+int32_t motion_deg_to_steps(const axis_t *ax, float deg);
 
 /* Current JOINT angle. */
 float motion_get_angle_deg(const axis_t *ax);

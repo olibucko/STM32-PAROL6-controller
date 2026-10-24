@@ -13,6 +13,9 @@
  *   - Every command gets exactly ONE reply line, starting with either
  *       OK  ...            the command was accepted
  *       ERR <reason>       it was refused, and nothing changed
+ *   - A move's OK says where it starts and ends, so a surprise (like a long
+ *     trip back from a far-off position) is visible straight away:
+ *       OK 1 from=<degrees> to=<degrees>
  *   - When a move ends (finished, stopped or halted) the controller sends,
  *     by itself:
  *       DONE <joint> pos=<degrees>
@@ -24,7 +27,9 @@
  *   HELP                      list the commands
  *   PING                      check the link: replies OK PONG
  *   STATUS j                  position, moving or not, steps left, settings
- *   MOVE j deg [rpm]          go to an absolute angle
+ *   INFO j                    the joint's fixed settings (range, gear ratio,
+ *                             limits). Read-only: these are set in joints.c.
+ *   MOVE j deg [rpm]          go to an ABSOLUTE angle (0 = standby / ZERO)
  *   MOVEREL j deg [rpm]       move by an amount from where it is now
  *   STEPS j n [rpm]           move by n microsteps (for tests)
  *   SPEED j rpm               set the speed used when [rpm] is left out
@@ -37,10 +42,12 @@
  *   Numbers starting "0x" are read as hexadecimal, e.g. RREG 1 0x6C.
  *
  * EXAMPLE
- *   PC sends:   MOVE 1 90 30
- *   Reply:      OK
- *   ...about a second later...
+ *   PC sends:   MOVE 1 90 5
+ *   Reply:      OK 1 from=0.000 to=90.000
+ *   ...about three seconds later...
  *               DONE 1 pos=90.000
+ *
+ * ANGLES AND SPEEDS ARE FOR THE JOINT, not the motor (see joints.c).
  */
 
 #ifndef COMMAND_H
@@ -49,14 +56,9 @@
 #include "motion.h"
 #include <stdint.h>
 
-/* Speed and acceleration each joint starts with (changeable with SPEED and
- * ACCEL). These are the values proven on the bench so far. */
-#define CMD_DEFAULT_SPEED_RPM     30.0f
-#define CMD_DEFAULT_ACCEL_RPM_S  120.0f
-
 /* Hand the module the list of axes. axes[0] becomes joint 1, axes[1]
- * joint 2, and so on. Also applies the default speed and acceleration.
- * Call once, after motion_init() for every axis. */
+ * joint 2, and so on. Each joint starts at its own default speed (set in
+ * joints.c). Call once, after motion_init() for every axis. */
 void command_init(axis_t *const axes[], uint8_t count);
 
 /* Carry out one command line and send its reply. */

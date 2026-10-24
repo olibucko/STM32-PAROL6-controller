@@ -23,8 +23,10 @@
 /* USER CODE BEGIN Includes */
 #include "tmc5160.h"   /* SPI access to the motor driver's settings        */
 #include "motion.h"    /* step generation and smooth moves (motion.c)      */
+#include "joints.h"    /* each joint's fixed settings (joints.c)           */
 #include "serial.h"    /* text lines to and from the PC (serial.c)         */
 #include "command.h"   /* what the PC's commands mean (command.c)          */
+#include <stdio.h>     /* snprintf, for the start-up fault message         */
 
 /* USER CODE END Includes */
 
@@ -58,44 +60,9 @@ UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 
-/* Joint 1 (base). Everything the motion module needs to know about this
- * motor: which timer and pins drive it, and its units. All of the move state
- * lives inside this one variable too, so adding joint 2 later means adding a
- * second variable like this one — the motion code itself does not change.
- *
- * `.name = value` sets one field by name; any field not listed starts at 0.
- * The fields marked "worked out by motion_init()" in motion.h are filled in
- * when motion_init(&joint1) runs. */
-static axis_t joint1 =
-{
-    /* Hardware */
-    .tim                 = &htim2,          /* TIM2 makes the STEP pulses     */
-    .tim_channel         = TIM_CHANNEL_1,   /* ...on channel 1 = pin PA0      */
-    .dir_port            = DIR_GPIO_Port,   /* DIR on pin PA1                 */
-    .dir_pin             = DIR_Pin,
-    .dir_invert          = 0,               /* 1 to flip which way is "+"     */
-
-    /* Timer clock: 90 MHz / (prescaler 89 + 1) = 1 MHz. Must match CubeMX. */
-    .tick_hz             = 1000000.0f,
-
-    /* Units */
-    .motor_steps_per_rev = 51200.0f,        /* 200 full steps x 256 microsteps */
-    .gear_ratio          = 1.0f,            /* Bare motor on bench */
-
-    /* Pulse and slowest speed */
-    .step_pulse_us       = 5.0f,            /* STEP high time, microseconds   */
-    .v_start_hz          = 500.0f,          /* first and last step rate       */
-
-    /* Limits: the fastest values tested on the bench so far. Raise them
-     * once the step-rate budget has been measured (roadmap item 4). */
-    .max_rpm             = 60.0f,
-    .max_accel_rpm_s     = 600.0f,
-};
-
-/* The list of axes handed to the command module. Joint 1 is first. For the
- * full arm this becomes { &joint1, &joint2, ..., &joint6 }. */
-static axis_t *const s_axes[] = { &joint1 };
-#define NUM_AXES  (sizeof s_axes / sizeof s_axes[0])
+/* Each joint's settings (timer, pins, gear ratio, speed and range limits)
+ * now live in joints.c, so they are kept together in one table as joints
+ * are added. */
 
 /* USER CODE END PV */
 
@@ -157,15 +124,21 @@ int main(void)
   /* 1. Serial link first, so any start-up problem can be reported. */
   serial_init(&huart2);
 
-  /* 2. Joint 1. Done before the driver is configured, so the STEP pin is
-   *    held LOW as early as possible (a floating STEP pin makes the motor
-   *    creep — found 21 Oct and again 24 Oct). Note: during reset, and
-   *    while the debugger has the chip paused before this line, STEP still
-   *    floats. Only a pull-down resistor on STEP fixes that window. */
-  if (motion_init(&joint1) != 0)
+  /* 2. Every joint. Done before the driver is configured, so the STEP pins
+   *    are held LOW as early as possible (a floating STEP pin makes the
+   *    motor creep — found 21 Oct and again 24 Oct). Note: during reset,
+   *    and while the debugger has the chip paused before this line, STEP
+   *    still floats. Only a pull-down resistor on STEP fixes that window. */
+  for (uint8_t i = 0; i < g_joint_count; i++)
   {
-      serial_println("# FAULT motion_init failed: check the joint1 settings");
-      Error_Handler();
+      if (motion_init(g_joints[i]) != 0)
+      {
+          char msg[64];
+          snprintf(msg, sizeof msg,
+                   "# FAULT joint %u settings rejected: check joints.c", (unsigned)(i + 1));
+          serial_println(msg);
+          Error_Handler();
+      }
   }
 
   /* 3. Motor driver settings over SPI. */
@@ -177,8 +150,8 @@ int main(void)
   tmc5160_write(TMC_IHOLD_IRUN,   0x00081810);   /* hold / run current      */
   tmc5160_write(TMC_TPOWERDOWN,   0x0000000A);   /* delay before hold current */
 
-  /* 4. Commands. Also sets each joint's default speed and acceleration. */
-  command_init(s_axes, NUM_AXES);
+  /* 4. Commands. */
+  command_init(g_joints, g_joint_count);
 
   serial_println("# PAROL6 controller ready. Type HELP for commands.");
 

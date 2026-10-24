@@ -72,6 +72,13 @@ int motion_init(axis_t *ax)
     if (ax->gear_ratio <= 0.0f || ax->v_start_hz <= 0.0f)           return -1;
     if (ax->step_pulse_us <= 0.0f)                                  return -1;
     if (ax->max_rpm <= 0.0f || ax->max_accel_rpm_s <= 0.0f)         return -1;
+    if (ax->default_rpm <= 0.0f || ax->default_rpm > ax->max_rpm)   return -1;
+    if (ax->default_accel_rpm_s <= 0.0f ||
+        ax->default_accel_rpm_s > ax->max_accel_rpm_s)              return -1;
+    if (!(ax->min_deg < ax->max_deg))                               return -1;
+    /* 0 deg (the power-up position) must be inside the range, or the joint
+     * could never move at all until re-zeroed. */
+    if (ax->min_deg > 0.0f || ax->max_deg < 0.0f)                   return -1;
     if (s_axis_count >= MOTION_MAX_AXES)                            return -1;
 
     /* Unit conversions, worked out once here so the moves don't redo them.
@@ -91,9 +98,11 @@ int motion_init(axis_t *ax)
                                                                  : 0xFFFFu;
 
     ax->vstart_sq = ax->v_start_hz * ax->v_start_hz;
-    /* two_a stays as the caller left it (normally 0). With 0 acceleration
-     * every step runs at v_start_hz — a slow crawl — until
-     * motion_set_accel_rpm_s() is called. */
+
+    /* Range limits in steps. Rounded inwards (towards 0), so rounding can
+     * never let a move end fractionally outside the stated range. */
+    ax->min_steps = (int32_t)(ax->min_deg * ax->steps_per_deg);
+    ax->max_steps = (int32_t)(ax->max_deg * ax->steps_per_deg);
 
     /* Start from a known, stopped state. */
     ax->position_steps = 0;
@@ -120,6 +129,9 @@ int motion_init(axis_t *ax)
 
     /* Register the axis so the interrupt can find it. */
     s_axes[s_axis_count++] = ax;
+
+    /* Starting acceleration (checked above, so this can't be refused). */
+    motion_set_accel_rpm_s(ax, ax->default_accel_rpm_s);
     return 0;
 }
 
@@ -132,6 +144,7 @@ int motion_set_accel_rpm_s(axis_t *ax, float rpm_per_s)
      * ramp formula uses 2a (see ramp_arr). */
     float steps_per_joint_rev = ax->motor_steps_per_rev * ax->gear_ratio;
     ax->two_a = 2.0f * rpm_per_s * steps_per_joint_rev / 60.0f;
+    ax->accel_rpm_s = rpm_per_s;
     return MOTION_OK;
 }
 
@@ -154,6 +167,11 @@ int motion_move_steps(axis_t *ax, int32_t n, float rpm)
 
     uint32_t hz = joint_rpm_to_step_hz(ax, rpm);
     if (hz == 0) return MOTION_ERR_LIMIT;   /* so slow it rounds to 0 steps/s */
+
+    /* Where would this move end? Worked out in 64-bit numbers so that even
+     * a huge n can't overflow and wrap round into a "valid" answer. */
+    int64_t end = (int64_t)ax->position_steps + (int64_t)n;
+    if (end < ax->min_steps || end > ax->max_steps) return MOTION_ERR_RANGE;
 
     if (n == 0)
     {
@@ -191,16 +209,29 @@ int motion_move_steps(axis_t *ax, int32_t n, float rpm)
     return MOTION_OK;
 }
 
+/* Round a number of steps to the nearest whole step. Adding 0.5 and then
+ * cutting off the fraction rounds to nearest for positive numbers; negative
+ * numbers need 0.5 taken away instead (so -2.6 -> -3, not -2). */
+static int32_t round_steps(float steps)
+{
+    return (steps >= 0.0f) ? (int32_t)(steps + 0.5f) : (int32_t)(steps - 0.5f);
+}
+
+int32_t motion_deg_to_steps(const axis_t *ax, float deg)
+{
+    return round_steps(deg * ax->steps_per_deg);
+}
+
 int motion_move_to_deg(axis_t *ax, float deg, float rpm)
 {
     /* Absolute target in steps, minus where we are = how far to go. */
-    int32_t target = (int32_t)(deg * ax->steps_per_deg);
+    int32_t target = motion_deg_to_steps(ax, deg);
     return motion_move_steps(ax, target - ax->position_steps, rpm);
 }
 
 int motion_move_to_rad(axis_t *ax, float rad, float rpm)
 {
-    int32_t target = (int32_t)(rad * ax->steps_per_rad);
+    int32_t target = round_steps(rad * ax->steps_per_rad);
     return motion_move_steps(ax, target - ax->position_steps, rpm);
 }
 
