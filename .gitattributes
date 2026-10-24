@@ -1,5 +1,7 @@
-CAD filter=lfs diff=lfs merge=lfs -text
-kinematics-sim filter=lfs diff=lfs merge=lfs -text
-resources filter=lfs diff=lfs merge=lfs -text
-.zip filter=lfs diff=lfs merge=lfs -text
-.STL filter=lfs diff=lfs merge=lfs -text
+# Large binary files go to Git LFS: the repo stores a small pointer,
+# GitHub stores the real file. Source code is deliberately NOT here.
+CAD/**  filter=lfs diff=lfs merge=lfs -text
+*.STL   filter=lfs diff=lfs merge=lfs -text
+*.stl   filter=lfs diff=lfs merge=lfs -text
+*.zip   filter=lfs diff=lfs merge=lfs -text
+*.pdf   filter=lfs diff=lfs merge=lfs -text
