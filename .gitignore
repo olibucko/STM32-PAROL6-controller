@@ -23,3 +23,7 @@ CAD/Virtual Assembly/STL.zip
 # Build outputs (STM32CubeIDE)
 firmware/toolchain-setup/Debug/
 firmware/toolchain-setup/Release/
+
+# Python compiled-code caches (recreated automatically when scripts run)
+__pycache__/
+*.pyc
