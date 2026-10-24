@@ -21,10 +21,10 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "tmc5160.h"
-#include <stdio.h>
-#include <math.h>                        // [CHANGE 1] sqrtf for the ramp
-#include <string.h>
+#include "tmc5160.h"   /* SPI access to the motor driver's settings        */
+#include "motion.h"    /* step generation and smooth moves (motion.c)      */
+#include "serial.h"    /* text lines to and from the PC (serial.c)         */
+#include "command.h"   /* what the PC's commands mean (command.c)          */
 
 /* USER CODE END Includes */
 
@@ -36,19 +36,11 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
-/* [CHANGE 2] Unit constants moved up from USER CODE 4 so everything below
- * (accel setter, ramp) can use them. */
-#define STEPS_PER_REV     51200.0f                 // 200 full x 256 usteps
-#define STEPS_PER_DEG     (STEPS_PER_REV / 360.0f)
-#define STEPS_PER_RAD     (STEPS_PER_REV / 6.2831853f)
-
-/* [CHANGE 3] Ramp/timer constants */
-#define TIM_TICK_HZ       1000000.0f   // TIM2 tick: 90 MHz / (PSC 89 + 1)
-#define STEP_PULSE_TICKS  5u           // STEP high time = 5 us (fixed width)
-#define V_START_HZ        500.0f       // first & last step rate; must be > 0
-
-#define RUN_MSCNT_TEST    1            // [CHANGE 9] set 0 once verified
-#define RUN_ACCEL_DEMO    1            // B1 runs the acceleration demo (0 = waypoint cycle)
+/* The motion constants that used to live here are now settings of each axis
+ * (see `joint1` below). The bench-test switches (RUN_MSCNT_TEST,
+ * RUN_ACCEL_DEMO) are gone: nothing moves at power-up any more, and those
+ * tests are now run from the PC (host/parol6_link.py). The old versions are
+ * in git history. */
 
 /* USER CODE END PD */
 
@@ -66,20 +58,44 @@ UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 
-uint32_t val;
+/* Joint 1 (base). Everything the motion module needs to know about this
+ * motor: which timer and pins drive it, and its units. All of the move state
+ * lives inside this one variable too, so adding joint 2 later means adding a
+ * second variable like this one — the motion code itself does not change.
+ *
+ * `.name = value` sets one field by name; any field not listed starts at 0.
+ * The fields marked "worked out by motion_init()" in motion.h are filled in
+ * when motion_init(&joint1) runs. */
+static axis_t joint1 =
+{
+    /* Hardware */
+    .tim                 = &htim2,          /* TIM2 makes the STEP pulses     */
+    .tim_channel         = TIM_CHANNEL_1,   /* ...on channel 1 = pin PA0      */
+    .dir_port            = DIR_GPIO_Port,   /* DIR on pin PA1                 */
+    .dir_pin             = DIR_Pin,
+    .dir_invert          = 0,               /* 1 to flip which way is "+"     */
 
-volatile int32_t  g_position_steps  = 0;  // absolute position, signed, in steps
-volatile uint32_t g_steps_remaining = 0;  // steps left in current move (debug/info)
-volatile int8_t   g_step_dir        = 1;  // +1 or -1, applied per step
+    /* Timer clock: 90 MHz / (prescaler 89 + 1) = 1 MHz. Must match CubeMX. */
+    .tick_hz             = 1000000.0f,
 
-/* [CHANGE 3] Ramp state */
-volatile uint32_t g_steps_total = 0;      // |n| for current move
-volatile uint32_t g_steps_done  = 0;      // pulses launched so far
-volatile uint8_t  g_moving      = 0;      // 1 until the timer has actually stopped
+    /* Units */
+    .motor_steps_per_rev = 51200.0f,        /* 200 full steps x 256 microsteps */
+    .gear_ratio          = 1.0f,            /* Bare motor on bench */
 
-static float g_vmax  = 0.0f;              // cruise rate, steps/s (per move)
-static float g_two_a = 0.0f;              // 2 x accel, steps/s^2
-static const float g_vstart2 = V_START_HZ * V_START_HZ;
+    /* Pulse and slowest speed */
+    .step_pulse_us       = 5.0f,            /* STEP high time, microseconds   */
+    .v_start_hz          = 500.0f,          /* first and last step rate       */
+
+    /* Limits: the fastest values tested on the bench so far. Raise them
+     * once the step-rate budget has been measured (roadmap item 4). */
+    .max_rpm             = 60.0f,
+    .max_accel_rpm_s     = 600.0f,
+};
+
+/* The list of axes handed to the command module. Joint 1 is first. For the
+ * full arm this becomes { &joint1, &joint2, ..., &joint6 }. */
+static axis_t *const s_axes[] = { &joint1 };
+#define NUM_AXES  (sizeof s_axes / sizeof s_axes[0])
 
 /* USER CODE END PV */
 
@@ -89,40 +105,18 @@ static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_SPI2_Init(void);
 static void MX_TIM2_Init(void);
+
 /* USER CODE BEGIN PFP */
 
-void motor_set_dir(uint8_t fwd);
-/* [CHANGE 8] motor_set_step_hz / motor_set_rpm removed (free-running, uncounted) */
-
-void set_accel_rpm_s(float rpm_per_s);
-
-void move_steps(int32_t n, float rpm);
-void move_to_deg(float deg, float rpm);
-void move_to_rad(float rad, float rpm);
-float get_angle_deg(void);
-float get_angle_rad(void);
-
-void move_wait(void);
-uint8_t move_busy(void);
+/* Motion functions are now declared in motion.h. */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-	static void dbg(const char *tag, uint32_t v)
-	{
-		char buf[48];
-		int n = snprintf(buf, sizeof(buf), "%-10s 0x%08lX\r\n", tag, (unsigned long)v);
-		HAL_UART_Transmit(&huart2, (uint8_t *)buf, n, HAL_MAX_DELAY);
-	}
-
-	/* Print a plain text line over UART. */
-	static void say(const char *msg)
-	{
-		HAL_UART_Transmit(&huart2, (uint8_t *)msg, strlen(msg), HAL_MAX_DELAY);
-		HAL_UART_Transmit(&huart2, (uint8_t *)"\r\n", 2, HAL_MAX_DELAY);
-	}
+/* (The dbg() and say() print helpers that were here are replaced by
+ * serial_println() in serial.c.) */
 
 /* USER CODE END 0 */
 
@@ -160,67 +154,65 @@ int main(void)
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
 
-  tmc5160_write(TMC_GSTAT, 0x07);
-  tmc5160_write(TMC_GCONF,        0x00000000);   // SpreadCycle
-  tmc5160_write(TMC_GLOBALSCALER, 128);
-  tmc5160_write(TMC_CHOPCONF,     0x000100C3);   // TOFF=3, MRES=256
-  tmc5160_write(TMC_IHOLD_IRUN,   0x00081810);
-  tmc5160_write(TMC_TPOWERDOWN,   0x0000000A);
+  /* 1. Serial link first, so any start-up problem can be reported. */
+  serial_init(&huart2);
 
-  /* STEP idle state: output enabled, CCR=0 -> PA0 driven LOW, counter stopped. */
-  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
-  htim2.Instance->EGR  = TIM_EGR_UG;                 // load CCR=0 into shadow
-  __HAL_TIM_CLEAR_FLAG(&htim2, TIM_FLAG_UPDATE);
-  htim2.Instance->CCER |= TIM_CCER_CC1E;             // enable output (counter still off)
-
-  set_accel_rpm_s(120.0f);   // [CHANGE 7] 0 -> 30 rpm in 0.25 s (~22.5 deg of travel)
-
-#if RUN_MSCNT_TEST
-  /* [CHANGE 9] Step-count exactness check against the chip itself.
-   * 12345 mod 1024 = 57. Expect d = 57 (or 967 if polarity counts down). */
+  /* 2. Joint 1. Done before the driver is configured, so the STEP pin is
+   *    held LOW as early as possible (a floating STEP pin makes the motor
+   *    creep — found 21 Oct and again 24 Oct). Note: during reset, and
+   *    while the debugger has the chip paused before this line, STEP still
+   *    floats. Only a pull-down resistor on STEP fixes that window. */
+  if (motion_init(&joint1) != 0)
   {
-      uint32_t m0 = tmc5160_read(TMC_MSCNT) & 0x3FF;
-      move_steps(12345, 30.0f);  move_wait();
-      HAL_Delay(50);
-      uint32_t m1 = tmc5160_read(TMC_MSCNT) & 0x3FF;
-      dbg("MSCNT d", (m1 - m0) & 0x3FF);
-      move_steps(-12345, 30.0f); move_wait();        // back to 0
-      HAL_Delay(500);
+      serial_println("# FAULT motion_init failed: check the joint1 settings");
+      Error_Handler();
   }
-#endif
 
-  /* USER CODE END 2 */
+  /* 3. Motor driver settings over SPI. */
+  tmc5160_write(TMC_GSTAT,        0x07);         /* clear old fault flags   */
+  tmc5160_write(TMC_GCONF,        0x00000000);   /* SpreadCycle chopper     */
+  tmc5160_write(TMC_GLOBALSCALER, 128);          /* overall current scale   */
+  tmc5160_write(TMC_CHOPCONF,     0x000100C3);   /* TOFF=3 (driver on),
+                                                  * 256 microsteps         */
+  tmc5160_write(TMC_IHOLD_IRUN,   0x00081810);   /* hold / run current      */
+  tmc5160_write(TMC_TPOWERDOWN,   0x0000000A);   /* delay before hold current */
+
+  /* 4. Commands. Also sets each joint's default speed and acceleration. */
+  command_init(s_axes, NUM_AXES);
+
+  serial_println("# PAROL6 controller ready. Type HELP for commands.");
+
+/* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  /* The main loop never waits for anything. Each pass it:
+   *   1. carries out any complete command line from the PC,
+   *   2. reports any moves that have finished (DONE lines),
+   *   3. checks the blue B1 button, which slows every joint to a stop.
+   * One pass takes microseconds, so all three happen thousands of times a
+   * second. Moves themselves run in the background on the timers. */
+  uint8_t b1_was_pressed = 0;
+
   while (1)
   {
-	    if (HAL_GPIO_ReadPin(B1_GPIO_Port, B1_Pin) == GPIO_PIN_RESET)   // B1 pressed
-	    {
-#if RUN_ACCEL_DEMO
-	        /* Acceleration demo, bare shaft. Cruise 60 rpm = 1 rev/s. */
-	        say("1) Gentle: 30 rpm/s -> 3 revs (2 s up, 1 s cruise, 2 s down)");
-	        set_accel_rpm_s(30.0f);
-	        move_to_deg(1080.0f, 60.0f);  move_wait();  HAL_Delay(1500);
+      char line[SERIAL_LINE_MAX + 1];
+      int  got = serial_read_line(line, sizeof line);
+      if (got == 1)       command_execute(line);
+      else if (got == -1) serial_println("ERR line too long");
 
-	        say("2) Brisk: 600 rpm/s -> back 3 revs (0.1 s ramps)");
-	        set_accel_rpm_s(600.0f);
-	        move_to_deg(0.0f, 60.0f);     move_wait();  HAL_Delay(1500);
+      command_report_finished_moves();
 
-	        say("3) Short move: 45 deg at 120 rpm/s - never reaches 60 rpm (triangle)");
-	        set_accel_rpm_s(120.0f);
-	        move_to_deg(45.0f, 60.0f);    move_wait();  HAL_Delay(1500);
+      /* B1 reads LOW (RESET) while pressed. Act on the moment it is pressed,
+       * not for as long as it is held, so the message prints only once. */
+      uint8_t b1_pressed = (HAL_GPIO_ReadPin(B1_GPIO_Port, B1_Pin) == GPIO_PIN_RESET);
+      if (b1_pressed && !b1_was_pressed)
+      {
+          command_stop_all();
+          serial_println("# B1 pressed: stopping all joints");
+      }
+      b1_was_pressed = b1_pressed;
 
-	        say("Return to 0 (120 rpm/s)");
-	        move_to_deg(0.0f, 60.0f);     move_wait();
-	        say("Done - press B1 to run again");
-#else
-	        move_to_deg(90.0f, 30.0f);   move_wait();   HAL_Delay(500);
-	        move_to_deg(180.0f, 30.0f);  move_wait();   HAL_Delay(500);
-	        move_to_deg(90.0f, 30.0f);   move_wait();   HAL_Delay(500);
-	        move_to_deg(0.0f, 30.0f);    move_wait();
-#endif
-	    }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -344,7 +336,7 @@ static void MX_TIM2_Init(void)
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim2.Init.Period = 999;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;   // [CHANGE 4] set in .ioc too
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
   {
     Error_Handler();
@@ -374,8 +366,6 @@ static void MX_TIM2_Init(void)
   }
   /* USER CODE BEGIN TIM2_Init 2 */
 
-  /* [CHANGE 4] CCR1 preload. HAL_TIM_PWM_ConfigChannel already sets OC1PE;
-   * stated explicitly because the ramp depends on it. */
   __HAL_TIM_ENABLE_OCxPRELOAD(&htim2, TIM_CHANNEL_1);
 
   /* USER CODE END TIM2_Init 2 */
@@ -467,135 +457,8 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
-	void motor_set_dir(uint8_t fwd)
-	{
-		HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, fwd ? GPIO_PIN_SET : GPIO_PIN_RESET);
-	}
-
-/* RPM -> step frequency (Hz). Internal helper. */
-static uint32_t rpm_to_hz(float rpm)
-{
-    return (uint32_t)(rpm * STEPS_PER_REV / 60.0f);
-}
-
-/* [CHANGE 7] Acceleration in rpm/s -> 2a in steps/s^2. Call only while !g_moving. */
-void set_accel_rpm_s(float rpm_per_s)
-{
-    g_two_a = 2.0f * rpm_per_s * STEPS_PER_REV / 60.0f;
-}
-
-/* [CHANGE 5] Ramp: step rate for a pulse `from_start` steps into the move,
- * with `to_end` steps still to follow it.
- * Constant accel => v^2 = v0^2 + 2*a*s. min(accel limb, decel limb, vmax)
- * is the trapezoid; short moves become triangles automatically. */
-static uint32_t ramp_arr(uint32_t from_start, uint32_t to_end)
-{
-    float v_up = sqrtf(g_vstart2 + g_two_a * (float)from_start);
-    float v_dn = sqrtf(g_vstart2 + g_two_a * (float)to_end);
-    float v    = (v_up < v_dn) ? v_up : v_dn;
-    if (v > g_vmax) v = g_vmax;
-
-    uint32_t arr = (uint32_t)(TIM_TICK_HZ / v + 0.5f) - 1u;
-    if (arr < 2u * STEP_PULSE_TICKS) arr = 2u * STEP_PULSE_TICKS;  // keep a low gap
-    return arr;
-}
-
-/* [CHANGE 5] Write preload regs for the period AFTER the one now running. */
-static void load_next_period(void)
-{
-    if (g_steps_done >= g_steps_total) {
-        /* All pulses launched: next period is blank (CCR=0 -> pin stays low).
-         * Its update event is where the ISR stops the timer. */
-        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
-    } else {
-        uint32_t from_start = g_steps_done;
-        uint32_t to_end     = g_steps_total - g_steps_done - 1u;
-        __HAL_TIM_SET_AUTORELOAD(&htim2, ramp_arr(from_start, to_end));
-        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, STEP_PULSE_TICKS);
-    }
-}
-
-/* [CHANGE 6] ISR: fires at the start of every period, after preload -> shadow. */
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-{
-    if (htim->Instance != TIM2) return;
-
-    if (g_steps_done >= g_steps_total) {          // blank period began -> done
-        /* Stop the COUNTER only. CC1E stays on and CCR=0 (blank period), so
-         * PA0 is actively driven LOW while idle. Disabling the channel
-         * (HAL_TIM_PWM_Stop) left STEP floating -> noise counted as steps. */
-        htim2.Instance->CR1 &= ~TIM_CR1_CEN;
-        __HAL_TIM_DISABLE_IT(&htim2, TIM_IT_UPDATE);
-        g_moving = 0;
-        return;
-    }
-
-    /* Hardware has just launched the next STEP pulse. */
-    g_steps_done++;
-    g_steps_remaining = g_steps_total - g_steps_done;
-    g_position_steps += g_step_dir;
-
-    load_next_period();
-}
-
-/* [CHANGE 6] Relative move: n steps signed, cruise speed in RPM. */
-void move_steps(int32_t n, float rpm)
-{
-    uint32_t hz = rpm_to_hz(rpm);
-    if (n == 0 || hz == 0 || g_moving) return;
-
-    g_step_dir = (n > 0) ? 1 : -1;
-    motor_set_dir(n > 0);
-
-    g_steps_total = (uint32_t)(n > 0 ? n : -n);
-    g_vmax        = (float)hz;
-    g_moving      = 1;
-
-    /* Period 1: write preload, UG copies it to shadow and zeroes CNT. */
-    __HAL_TIM_SET_AUTORELOAD(&htim2, ramp_arr(0, g_steps_total - 1u));
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, STEP_PULSE_TICKS);
-    htim2.Instance->EGR = TIM_EGR_UG;
-    __HAL_TIM_CLEAR_FLAG(&htim2, TIM_FLAG_UPDATE);   // UG sets UIF; discard
-
-    /* PWM1: pin goes high the instant the counter runs (CNT=0 < CCR),
-     * so pulse 1 is launched by the start itself — count it here. */
-    g_steps_done      = 1;
-    g_steps_remaining = g_steps_total - 1u;
-    g_position_steps += g_step_dir;
-    load_next_period();                              // preload period 2 (or blank)
-
-    __HAL_TIM_ENABLE_IT(&htim2, TIM_IT_UPDATE);
-    htim2.Instance->CR1 |= TIM_CR1_CEN;              // CC1E already on since boot
-}
-
-/* Absolute move to an angle in DEGREES, speed in RPM. */
-void move_to_deg(float deg, float rpm)
-{
-    int32_t target = (int32_t)(deg * STEPS_PER_DEG);
-    move_steps(target - g_position_steps, rpm);
-}
-
-/* Absolute move in RADIANS — kept for the kinematics layer. */
-void move_to_rad(float rad, float rpm)
-{
-    int32_t target = (int32_t)(rad * STEPS_PER_RAD);
-    move_steps(target - g_position_steps, rpm);
-}
-
-float get_angle_deg(void) { return g_position_steps / STEPS_PER_DEG; }
-float get_angle_rad(void) { return g_position_steps / STEPS_PER_RAD; }
-
-/* [CHANGE 6] Block until the timer has actually stopped. */
-void move_wait(void)
-{
-    while (g_moving) { __NOP(); }
-}
-
-/* [CHANGE 6] True while a move is in progress. Non-blocking. */
-uint8_t move_busy(void)
-{
-    return g_moving;
-}
+/* The motion code that used to be here (direction pin, speed ramp, timer
+ * interrupt, move functions) now lives in motion.c / motion.h. */
 
 /* USER CODE END 4 */
 
